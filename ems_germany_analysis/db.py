@@ -57,6 +57,7 @@ async def create_tables(conn: psycopg.AsyncConnection, schema: str = "public") -
                 total_cost_seconds DOUBLE PRECISION,
                 geom GEOMETRY,
                 distance DOUBLE PRECISION,
+                ors_geojson JSONB,
                 PRIMARY KEY (gitter_id, hospital_id)
             )
         """).format(
@@ -64,3 +65,12 @@ async def create_tables(conn: psycopg.AsyncConnection, schema: str = "public") -
             table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE)
         )
         await cursor.execute(prepared_sql)
+
+        alter_sql = psycopg.sql.SQL("""
+            ALTER TABLE {schema}.{table}
+            ADD COLUMN IF NOT EXISTS ors_geojson JSONB
+        """).format(
+            schema=psycopg.sql.Identifier(schema),
+            table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE)
+        )
+        await cursor.execute(alter_sql)
