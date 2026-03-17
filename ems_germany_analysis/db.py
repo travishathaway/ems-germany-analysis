@@ -2,6 +2,7 @@
 Module for various functions and classes to help with database connections.
 """
 from logging import getLogger
+from typing import NamedTuple
 
 import psycopg
 import psycopg.sql
@@ -50,27 +51,78 @@ async def create_tables(conn: psycopg.AsyncConnection, schema: str = "public") -
     Create all tables needed for the application.
     """
     async with conn.cursor() as cursor:
-        prepared_sql = psycopg.sql.SQL("""
-            CREATE TABLE IF NOT EXISTS {schema}.{table} (
-                gitter_id VARCHAR(40),
-                hospital_id INTEGER NOT NULL,
-                total_cost_seconds DOUBLE PRECISION,
-                geom GEOMETRY,
-                distance DOUBLE PRECISION,
-                ors_geojson JSONB,
-                PRIMARY KEY (gitter_id, hospital_id)
+        try:
+            prepared_sql = psycopg.sql.SQL("""
+                CREATE TABLE IF NOT EXISTS {schema}.{table} (
+                    gitter_id VARCHAR(40),
+                    hospital_id INTEGER NOT NULL,
+                    total_cost_seconds DOUBLE PRECISION,
+                    geom GEOMETRY,
+                    distance DOUBLE PRECISION,
+                    PRIMARY KEY (gitter_id, hospital_id)
+                )
+            """).format(
+                schema=psycopg.sql.Identifier(schema),
+                table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE)
             )
-        """).format(
-            schema=psycopg.sql.Identifier(schema),
-            table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE)
-        )
-        await cursor.execute(prepared_sql)
+            await cursor.execute(prepared_sql)
 
-        alter_sql = psycopg.sql.SQL("""
-            ALTER TABLE {schema}.{table}
-            ADD COLUMN IF NOT EXISTS ors_geojson JSONB
-        """).format(
-            schema=psycopg.sql.Identifier(schema),
-            table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE)
-        )
-        await cursor.execute(alter_sql)
+            await cursor.execute(psycopg.sql.SQL("""
+                CREATE INDEX IF NOT EXISTS {idx_geom}
+                ON {schema}.{table} USING GIST (geom)
+            """).format(
+                idx_geom=psycopg.sql.Identifier(f"{CENSUS_HOSPITAL_ROUTE_TABLE}_geom_idx"),
+                schema=psycopg.sql.Identifier(schema),
+                table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE),
+            ))
+
+            await cursor.execute(psycopg.sql.SQL("""
+                CREATE INDEX IF NOT EXISTS {idx_hospital}
+                ON {schema}.{table} (hospital_id)
+            """).format(
+                idx_hospital=psycopg.sql.Identifier(f"{CENSUS_HOSPITAL_ROUTE_TABLE}_hospital_id_idx"),
+                schema=psycopg.sql.Identifier(schema),
+                table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE),
+            ))
+        except psycopg.Error as e:
+            raise EmsGermanyError(f"Error creating tables: {e!s}")
+
+
+class Hospital(NamedTuple):
+    """
+    Represents a record from the configured hospital table.
+    """
+    id: int
+    name: str
+    x: float   # EPSG:3035 easting
+    y: float   # EPSG:3035 northing
+    lon: float  # WGS84 longitude
+    lat: float  # WGS84 latitude
+
+
+async def get_hospitals(
+    conn: psycopg.AsyncConnection,
+    table: str = "notfall_krankenhauser_geocoded",
+    schema: str = "public"
+) -> list[Hospital]:
+    async with conn.cursor() as cursor:
+        try:
+            await cursor.execute(psycopg.sql.SQL("""
+                SELECT
+                    id,
+                    name,
+                    ST_X(geom),
+                    ST_Y(geom),
+                    ST_X(ST_Transform(geom, 4326)),
+                    ST_Y(ST_Transform(geom, 4326))
+                FROM
+                    {schema}.{table}
+            """).format(
+                schema=psycopg.sql.Identifier(schema),
+                table=psycopg.sql.Identifier(table)
+            ))
+
+            return [Hospital(*row) for row in await cursor.fetchall()]
+
+        except psycopg.Error as e:
+            raise EmsGermanyError(f"Error getting hospital ids: {e!s}")

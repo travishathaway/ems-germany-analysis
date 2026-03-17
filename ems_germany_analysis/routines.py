@@ -1,7 +1,7 @@
 import asyncio
 import json
+import logging
 from asyncio import Semaphore, CancelledError, create_task
-from typing import NamedTuple
 
 import click
 import httpx
@@ -9,15 +9,11 @@ import psycopg.sql
 import psycopg_pool
 from rich.progress import Progress
 
-from .constants import CENSUS_HOSPITAL_ROUTE_TABLE
-from .db import get_db_pool, create_tables
+from .constants import APP_NAME, CENSUS_HOSPITAL_ROUTE_TABLE
+from .db import get_db_pool, create_tables, get_hospitals, Hospital
+from .errors import EmsGermanyError
 
-
-class Hospital(NamedTuple):
-    id: int
-    name: str
-    x: float
-    y: float
+logger = logging.getLogger(APP_NAME)
 
 
 async def pgrouting_analyze(hospital_id, dsn, skip_network):
@@ -32,7 +28,10 @@ async def pgrouting_analyze(hospital_id, dsn, skip_network):
                 # Find a hospital and generate a 20km buffer around it
                 await cur.execute("""
                     SELECT
-                        id, name, ST_X(geom), ST_Y(geom)
+                        id, name,
+                        ST_X(geom), ST_Y(geom),
+                        ST_X(ST_Transform(geom, 4326)),
+                        ST_Y(ST_Transform(geom, 4326))
                     FROM
                         ems_germany_analysis.notfall_krankenhauser_geocoded
                     WHERE id = %(hospital_id)s
@@ -69,7 +68,7 @@ async def pgrouting_analyze(hospital_id, dsn, skip_network):
 
                 hospital_vertex_id = res[0]
 
-                print(hospital_vertex_id)
+                logger.debug("Hospital vertex id: %s", hospital_vertex_id)
 
                 # Fetch all the census points and their nearest routing vertex
                 await cur.execute("""
@@ -117,7 +116,7 @@ async def pgrouting_analyze(hospital_id, dsn, skip_network):
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
-                print("Cancelled all tasks.")
+                logger.error("Cancelled all tasks.")
 
     finally:
         await pool.close()
@@ -162,13 +161,22 @@ async def _calculate_and_save_cost(
                 ))
 
         except CancelledError:
-            # optionally log here
             raise
+        except Exception:
+            logger.exception(
+                "Error calculating cost for gitter_id=%s hospital_id=%s vertex_id=%s",
+                gitter_id, hospital_id, vertex_id
+            )
         finally:
             progress.advance(task_id)
 
 
-async def ors_routing_analyze(hospital_id: int, dsn: str, ors_url: str) -> None:
+async def ors_routing_analyze(
+    dsn: str,
+    ors_url: str,
+    hospital_table: str,
+    buffer: int
+) -> None:
     """Run ORS-based routing analysis for a single hospital."""
     pool = await get_db_pool(dsn)
 
@@ -177,59 +185,81 @@ async def ors_routing_analyze(hospital_id: int, dsn: str, ors_url: str) -> None:
             await create_tables(conn, "ems_germany_analysis")
 
             async with conn.cursor() as cur:
-                await cur.execute("""
-                    SELECT
-                        id, name,
-                        ST_X(geom), ST_Y(geom),
-                        ST_X(ST_Transform(geom, 4326)),
-                        ST_Y(ST_Transform(geom, 4326))
-                    FROM ems_germany_analysis.notfall_krankenhauser_geocoded
-                    WHERE id = %(hospital_id)s
-                """, {"hospital_id": hospital_id})
-                row = await cur.fetchone()
-                if row is None:
-                    raise click.ClickException(f"Hospital {hospital_id} not found.")
-                hosp_id, hosp_name, hosp_x, hosp_y, hosp_lon, hosp_lat = row
+                hospitals = await get_hospitals(conn, table=hospital_table, schema="ems_germany_analysis")
 
-                await cur.execute("""
-                    SELECT gitter_id_100m,
-                        ST_Y(ST_Transform(geom, 4326)) AS lat,
-                        ST_X(ST_Transform(geom, 4326)) AS lon
-                    FROM zensus.alter_in_5_altersklassen_100m
-                    WHERE ST_Contains(
-                        ST_Buffer(ST_SetSRID(ST_MakePoint(%(x)s, %(y)s), 3035), 15000),
-                        geom
-                    )
-                """, {"x": hosp_x, "y": hosp_y})
+                if not hospitals:
+                    raise EmsGermanyError(f"No hospitals found.")
+
+        for hospital in hospitals:
+            async with pool.connection() as conn, conn.cursor() as cur:
+                prepared_sql = psycopg.sql.SQL("""
+                    SELECT
+                        p.gitter_id_100m,
+                        ST_Y(ST_Transform(p.geom, 4326)) AS lat,
+                        ST_X(ST_Transform(p.geom, 4326)) AS lon
+                    FROM
+                        zensus.alter_in_5_altersklassen_100m p
+                    LEFT JOIN
+                        {schema}.{table} r
+                    ON
+                        p.gitter_id_100m = r.gitter_id
+                    WHERE
+                        r.gitter_id is null
+                    AND 
+                        ST_Contains(
+                            ST_Buffer(ST_SetSRID(ST_MakePoint(%(x)s, %(y)s), 3035), %(buffer)s),
+                            p.geom
+                        )
+                """).format(
+                    schema=psycopg.sql.Identifier("ems_germany_analysis"),
+                    table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE)
+                )
+                await cur.execute(
+                    prepared_sql,
+                    {"x": hospital.x, "y": hospital.y, "buffer": buffer}
+                )
                 census_rows = await cur.fetchall()
 
-        semaphore = Semaphore(10)
-        async with httpx.AsyncClient() as client:
-            with Progress() as progress:
-                task_id = progress.add_task(
-                    f"Routing {len(census_rows)} points for {hosp_name} (ORS)",
-                    total=len(census_rows),
-                )
-                tasks = [
-                    create_task(_ors_calculate_and_save(
-                        pool, client, semaphore, progress, task_id,
-                        gitter_id, hospital_id,
-                        hosp_lat, hosp_lon,
-                        census_lat, census_lon,
-                        ors_url,
-                    ))
-                    for gitter_id, census_lat, census_lon in census_rows
-                ]
-                try:
-                    await asyncio.gather(*tasks)
-                except CancelledError:
-                    for task in tasks:
-                        task.cancel()
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                    print("Cancelled all tasks.")
+            await _process_multiple_ors(pool, census_rows, hospital, ors_url)
 
     finally:
         await pool.close()
+
+
+async def _process_multiple_ors(
+    pool: psycopg_pool.AsyncConnectionPool,
+    census_rows: list,
+    hospital: Hospital,
+    ors_url: str
+) -> None:
+    """
+    Processes census_rows to query OpenRoutingService and import it into the database
+    """
+    semaphore = Semaphore(10)
+
+    async with httpx.AsyncClient() as client:
+        with Progress() as progress:
+            task_id = progress.add_task(
+                f"Routing {len(census_rows)} points for {hospital.name} (ORS)",
+                total=len(census_rows),
+            )
+            tasks = [
+                create_task(_ors_calculate_and_save(
+                    pool, client, semaphore, progress, task_id,
+                    gitter_id, hospital.id,
+                    hospital.lat, hospital.lon,
+                    census_lat, census_lon,
+                    ors_url,
+                ))
+                for gitter_id, census_lat, census_lon in census_rows
+            ]
+            try:
+                await asyncio.gather(*tasks)
+            except CancelledError:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                logger.error("Cancelled all tasks.")
 
 
 async def _ors_calculate_and_save(
@@ -254,6 +284,10 @@ async def _ors_calculate_and_save(
                 json={"coordinates": [[hospital_lon, hospital_lat], [census_lon, census_lat]]},
             )
             if response.status_code != 200:
+                logger.error(
+                    "ORS request failed for gitter_id=%s hospital_id=%s: HTTP %s - %s",
+                    gitter_id, hospital_id, response.status_code, response.text
+                )
                 return
 
             data = response.json()
@@ -264,18 +298,24 @@ async def _ors_calculate_and_save(
             async with pool.connection() as conn, conn.cursor() as cur:
                 prepared_sql = psycopg.sql.SQL("""
                     INSERT INTO {schema}.{table}
-                        (gitter_id, hospital_id, total_cost_seconds, geom, distance, ors_geojson)
-                    VALUES (%s, %s, %s, ST_Transform(ST_GeomFromGeoJSON(%s), 3035), %s, %s)
+                        (gitter_id, hospital_id, total_cost_seconds, geom, distance)
+                    VALUES (%s, %s, %s, ST_Transform(ST_GeomFromGeoJSON(%s), 3035), %s)
                     ON CONFLICT (gitter_id, hospital_id) DO UPDATE SET
                         total_cost_seconds = EXCLUDED.total_cost_seconds,
-                        geom = EXCLUDED.geom,
-                        ors_geojson = EXCLUDED.ors_geojson
+                        geom = EXCLUDED.geom
                 """).format(
                     schema=psycopg.sql.Identifier("ems_germany_analysis"),
                     table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE),
                 )
                 await cur.execute(prepared_sql, (
-                    gitter_id, hospital_id, total_cost_seconds, geometry_json, None, json.dumps(data)
+                    gitter_id, hospital_id, total_cost_seconds, geometry_json, None
                 ))
+        except CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Error processing ORS route for gitter_id=%s hospital_id=%s",
+                gitter_id, hospital_id
+            )
         finally:
             progress.advance(task_id)
