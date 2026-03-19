@@ -9,7 +9,13 @@ import psycopg.sql
 import psycopg_pool
 from rich.progress import Progress
 
-from .constants import APP_NAME, CENSUS_HOSPITAL_ROUTE_TABLE
+from .constants import (
+    APP_NAME,
+    CENSUS_HOSPITAL_ROUTE_TABLE_100M,
+    CENSUS_HOSPITAL_ROUTE_TABLE_1KM,
+    CENSUS_HOSPITAL_ROUTE_TABLE_10KM,
+    ResolutionSuffix
+)
 from .db import get_db_pool, create_tables, get_hospitals, Hospital
 from .errors import EmsGermanyError
 
@@ -154,7 +160,7 @@ async def _calculate_and_save_cost(
                     VALUES (%s, %s, %s, %s, %s)
                 """).format(
                     schema=psycopg.sql.Identifier("ems_germany_analysis"),
-                    table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE)
+                    table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE_100M)
                 )
                 await cur.execute(prepared_sql, (
                     gitter_id, hospital_id, total_cost_seconds, geom, distance
@@ -175,14 +181,23 @@ async def ors_routing_analyze(
     dsn: str,
     ors_url: str,
     hospital_table: str,
-    buffer: int
+    buffer: int,
+    resolution: ResolutionSuffix
 ) -> None:
     """Run ORS-based routing analysis for a single hospital."""
     pool = await get_db_pool(dsn)
 
+    match resolution:
+        case ResolutionSuffix.m100:
+            cost_table = CENSUS_HOSPITAL_ROUTE_TABLE_100M
+        case ResolutionSuffix.km1:
+            cost_table = CENSUS_HOSPITAL_ROUTE_TABLE_1KM
+        case ResolutionSuffix.km10:
+            cost_table = CENSUS_HOSPITAL_ROUTE_TABLE_10KM
+
     try:
         async with pool.connection() as conn:
-            await create_tables(conn, "ems_germany_analysis")
+            await create_tables(conn, resolution, schema="ems_germany_analysis")
 
             async with conn.cursor() as cur:
                 hospitals = await get_hospitals(conn, table=hospital_table, schema="ems_germany_analysis")
@@ -194,15 +209,16 @@ async def ors_routing_analyze(
             async with pool.connection() as conn, conn.cursor() as cur:
                 prepared_sql = psycopg.sql.SQL("""
                     SELECT
-                        p.gitter_id_100m,
+                        p.{gitter_id},
                         ST_Y(ST_Transform(p.geom, 4326)) AS lat,
                         ST_X(ST_Transform(p.geom, 4326)) AS lon
                     FROM
-                        zensus.alter_in_5_altersklassen_100m p
+                        zensus.{census_table} p
                     LEFT JOIN
                         {schema}.{table} r
                     ON
-                        p.gitter_id_100m = r.gitter_id
+                        p.{gitter_id} = r.gitter_id
+                        AND r.hospital_id = %(hospital_id)s
                     WHERE
                         r.gitter_id is null
                     AND 
@@ -211,16 +227,18 @@ async def ors_routing_analyze(
                             p.geom
                         )
                 """).format(
+                    gitter_id=psycopg.sql.Identifier(f"gitter_id_{resolution}"),
+                    census_table=psycopg.sql.Identifier(f"alter_in_5_altersklassen_{resolution}"),
                     schema=psycopg.sql.Identifier("ems_germany_analysis"),
-                    table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE)
+                    table=psycopg.sql.Identifier(cost_table)
                 )
                 await cur.execute(
                     prepared_sql,
-                    {"x": hospital.x, "y": hospital.y, "buffer": buffer}
+                    {"x": hospital.x, "y": hospital.y, "buffer": buffer, "hospital_id": hospital.id}
                 )
                 census_rows = await cur.fetchall()
 
-            await _process_multiple_ors(pool, census_rows, hospital, ors_url)
+            await _process_multiple_ors(pool, census_rows, hospital, ors_url, cost_table)
 
     finally:
         await pool.close()
@@ -230,7 +248,8 @@ async def _process_multiple_ors(
     pool: psycopg_pool.AsyncConnectionPool,
     census_rows: list,
     hospital: Hospital,
-    ors_url: str
+    ors_url: str,
+    cost_table: str
 ) -> None:
     """
     Processes census_rows to query OpenRoutingService and import it into the database
@@ -244,12 +263,14 @@ async def _process_multiple_ors(
                 total=len(census_rows),
             )
             tasks = [
+                # TODO: This needs to be broken up into a NamedTuple because there are too
+                #       many arguments to the function!
                 create_task(_ors_calculate_and_save(
                     pool, client, semaphore, progress, task_id,
                     gitter_id, hospital.id,
                     hospital.lat, hospital.lon,
                     census_lat, census_lon,
-                    ors_url,
+                    ors_url, cost_table
                 ))
                 for gitter_id, census_lat, census_lon in census_rows
             ]
@@ -263,25 +284,29 @@ async def _process_multiple_ors(
 
 
 async def _ors_calculate_and_save(
-        pool: psycopg_pool.AsyncConnectionPool,
-        client: httpx.AsyncClient,
-        semaphore: Semaphore,
-        progress: Progress,
-        task_id: int,
-        gitter_id: str,
-        hospital_id: int,
-        hospital_lat: float,
-        hospital_lon: float,
-        census_lat: float,
-        census_lon: float,
-        ors_url: str,
+    pool: psycopg_pool.AsyncConnectionPool,
+    client: httpx.AsyncClient,
+    semaphore: Semaphore,
+    progress: Progress,
+    task_id: int,
+    gitter_id: str,
+    hospital_id: int,
+    hospital_lat: float,
+    hospital_lon: float,
+    census_lat: float,
+    census_lon: float,
+    ors_url: str,
+    cost_table: str
 ) -> None:
     """Call ORS directions API and persist the result."""
     async with semaphore:
         try:
             response = await client.post(
                 f"{ors_url}/v2/directions/driving-car/geojson",
-                json={"coordinates": [[hospital_lon, hospital_lat], [census_lon, census_lat]]},
+                json={
+                    "coordinates": [[hospital_lon, hospital_lat], [census_lon, census_lat]],
+                    ""
+                },
             )
             if response.status_code != 200:
                 logger.error(
@@ -305,7 +330,7 @@ async def _ors_calculate_and_save(
                         geom = EXCLUDED.geom
                 """).format(
                     schema=psycopg.sql.Identifier("ems_germany_analysis"),
-                    table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE),
+                    table=psycopg.sql.Identifier(cost_table),
                 )
                 await cur.execute(prepared_sql, (
                     gitter_id, hospital_id, total_cost_seconds, geometry_json, None

@@ -4,7 +4,13 @@ import sys
 
 import click
 
-from .constants import APP_NAME
+from .constants import (
+    APP_NAME,
+    ResolutionSuffix,
+    CENSUS_HOSPITAL_ROUTE_TABLE_100M,
+    CENSUS_HOSPITAL_ROUTE_TABLE_1KM,
+    CENSUS_HOSPITAL_ROUTE_TABLE_10KM
+)
 from .routines import ors_routing_analyze, pgrouting_analyze
 
 
@@ -93,19 +99,36 @@ def pgr_analyze(hospital_id, dsn, skip_network, log_file):
     envvar="EMSDE_BUFFER",
     help="Buffer to use for including points around hospital (or set EMSDE_BUFFER env var).",
 )
-def ors_analyze(dsn, ors_url, hospital_table, log_file, buffer):
+@click.option(
+    "--resolution",
+    default="100m",
+    envvar="EMSDE_RESOLUTION",
+    help="Resolution to use when select census points to calculate (or set EMSDE_RESOLUTION env var).",
+)
+def ors_analyze(dsn, ors_url, hospital_table, log_file, buffer, resolution):
     """
     Use open routing service to generate cost calculations
+
+    TODO:
+        - Add "schema" as an option
     """
     _setup_logging(log_file)
     logger = logging.getLogger(APP_NAME)
 
     logger.info("Starting import")
 
-    asyncio.run(ors_routing_analyze(dsn, ors_url, hospital_table, buffer))
+    try:
+        resolution = ResolutionSuffix(resolution)
+    except ValueError as e:
+        raise click.ClickException(f"{e!r}")
+
+    asyncio.run(
+        ors_routing_analyze(
+            dsn, ors_url, hospital_table, buffer, resolution
+        )
+    )
 
     logger.info("Import Finished")
-
 
 
 if __name__ == "__main__":

@@ -8,7 +8,12 @@ import psycopg
 import psycopg.sql
 from psycopg_pool import AsyncConnectionPool
 
-from .constants import CENSUS_HOSPITAL_ROUTE_TABLE
+from .constants import (
+    CENSUS_HOSPITAL_ROUTE_TABLE_100M,
+    CENSUS_HOSPITAL_ROUTE_TABLE_1KM,
+    CENSUS_HOSPITAL_ROUTE_TABLE_10KM,
+    ResolutionSuffix
+)
 from .errors import EmsGermanyError
 
 
@@ -46,46 +51,68 @@ async def get_db_pool(dsn: str) -> AsyncConnectionPool:
         raise EmsGermanyError(f"Error creating connection pool: {e!s}")
 
 
-async def create_tables(conn: psycopg.AsyncConnection, schema: str = "public") -> None:
+async def create_tables(
+    conn: psycopg.AsyncConnection,
+    resolution: ResolutionSuffix,
+    schema: str = "public"
+) -> None:
     """
     Create all tables needed for the application.
     """
     async with conn.cursor() as cursor:
         try:
-            prepared_sql = psycopg.sql.SQL("""
-                CREATE TABLE IF NOT EXISTS {schema}.{table} (
-                    gitter_id VARCHAR(40),
-                    hospital_id INTEGER NOT NULL,
-                    total_cost_seconds DOUBLE PRECISION,
-                    geom GEOMETRY,
-                    distance DOUBLE PRECISION,
-                    PRIMARY KEY (gitter_id, hospital_id)
-                )
-            """).format(
-                schema=psycopg.sql.Identifier(schema),
-                table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE)
-            )
-            await cursor.execute(prepared_sql)
+            logger.info("creating tables")
 
-            await cursor.execute(psycopg.sql.SQL("""
-                CREATE INDEX IF NOT EXISTS {idx_geom}
-                ON {schema}.{table} USING GIST (geom)
-            """).format(
-                idx_geom=psycopg.sql.Identifier(f"{CENSUS_HOSPITAL_ROUTE_TABLE}_geom_idx"),
-                schema=psycopg.sql.Identifier(schema),
-                table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE),
-            ))
+            match resolution:
+                case ResolutionSuffix.m100:
+                    await create_route_cost_table(cursor, CENSUS_HOSPITAL_ROUTE_TABLE_100M, schema=schema)
+                case ResolutionSuffix.km1:
+                    await create_route_cost_table(cursor, CENSUS_HOSPITAL_ROUTE_TABLE_1KM, schema=schema)
+                case ResolutionSuffix.km10:
+                    await create_route_cost_table(cursor, CENSUS_HOSPITAL_ROUTE_TABLE_10KM, schema=schema)
 
-            await cursor.execute(psycopg.sql.SQL("""
-                CREATE INDEX IF NOT EXISTS {idx_hospital}
-                ON {schema}.{table} (hospital_id)
-            """).format(
-                idx_hospital=psycopg.sql.Identifier(f"{CENSUS_HOSPITAL_ROUTE_TABLE}_hospital_id_idx"),
-                schema=psycopg.sql.Identifier(schema),
-                table=psycopg.sql.Identifier(CENSUS_HOSPITAL_ROUTE_TABLE),
-            ))
+            logger.info("done creating tables")
         except psycopg.Error as e:
             raise EmsGermanyError(f"Error creating tables: {e!s}")
+
+
+async def create_route_cost_table(
+    cursor: psycopg.AsyncCursor,
+    table: str,
+    schema: str = "public",
+) -> None:
+    prepared_sql = psycopg.sql.SQL("""
+        CREATE TABLE IF NOT EXISTS {schema}.{table} (
+            gitter_id VARCHAR(40),
+            hospital_id INTEGER NOT NULL,
+            total_cost_seconds DOUBLE PRECISION,
+            geom GEOMETRY,
+            distance DOUBLE PRECISION,
+            PRIMARY KEY (gitter_id, hospital_id)
+        )
+    """).format(
+        schema=psycopg.sql.Identifier(schema),
+        table=psycopg.sql.Identifier(table)
+    )
+    await cursor.execute(prepared_sql)
+
+    await cursor.execute(psycopg.sql.SQL("""
+        CREATE INDEX IF NOT EXISTS {idx_geom}
+        ON {schema}.{table} USING GIST (geom)
+    """).format(
+        idx_geom=psycopg.sql.Identifier(f"{table}_geom_idx"),
+        schema=psycopg.sql.Identifier(schema),
+        table=psycopg.sql.Identifier(table),
+    ))
+
+    await cursor.execute(psycopg.sql.SQL("""
+        CREATE INDEX IF NOT EXISTS {idx_hospital}
+        ON {schema}.{table} (hospital_id)
+    """).format(
+        idx_hospital=psycopg.sql.Identifier(f"{table}_hospital_id_idx"),
+        schema=psycopg.sql.Identifier(schema),
+        table=psycopg.sql.Identifier(table),
+    ))
 
 
 class Hospital(NamedTuple):
