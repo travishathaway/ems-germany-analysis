@@ -1,30 +1,35 @@
-#!/usr/bin/env python3
 """
 Generate a hospital accessibility report for Germany.
 
-Produces a single self-contained HTML file with interactive charts (Plotly)
-and an interactive map (MapLibre GL JS).
-
-Usage:
-    python generate_report.py --dsn postgresql://user:pass@host/db
-    EMSDE_DSN=postgresql://... python generate_report.py
+Produces a directory containing index.html with interactive charts (Plotly),
+an interactive map (MapLibre GL JS), and GeoJSON data files loaded dynamically.
 """
 import json
+import pickle
 import sys
 from pathlib import Path
 
 import click
 import pandas as pd
+import platformdirs
 import plotly.graph_objects as go
 import psycopg
 from plotly.subplots import make_subplots
+
+from .constants import APP_NAME
 
 # ---------------------------------------------------------------------------
 # SQL queries
 # ---------------------------------------------------------------------------
 
+#: Resolution of census point data
+RESOLUTION = "1km"
+
+#: Table used to store cost calculations
+COST_TABLE = f"census_hospital_route_from_census_{RESOLUTION}"
+
 # Overall summary: one row per hospital level
-SQL_SUMMARY = """
+SQL_SUMMARY = f"""
 SELECT
     CAST(h.notfall AS float)::int         AS hospital_level,
     COUNT(DISTINCT r.hospital_id)          AS hospital_count,
@@ -44,7 +49,7 @@ SELECT
         / NULLIF(COUNT(*), 0),
         1
     )                                                     AS pct_routes_30min
-FROM ems_germany_analysis.census_hospital_route r
+FROM ems_germany_analysis.{COST_TABLE} r
 JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
 WHERE r.total_cost_seconds IS NOT NULL
 GROUP BY CAST(h.notfall AS float)::int
@@ -52,7 +57,7 @@ ORDER BY 1;
 """
 
 # Per census cell: minimum travel time to nearest hospital of each level
-SQL_PER_CELL = """
+SQL_PER_CELL = f"""
 WITH min_times AS (
     SELECT
         r.gitter_id,
@@ -60,7 +65,7 @@ WITH min_times AS (
         MIN(CASE WHEN CAST(h.notfall AS float)::int = 2 THEN r.total_cost_seconds END) AS min_secs_l2,
         MIN(CASE WHEN CAST(h.notfall AS float)::int = 3 THEN r.total_cost_seconds END) AS min_secs_l3,
         MIN(r.total_cost_seconds)                                                        AS min_secs_any
-    FROM ems_germany_analysis.census_hospital_route r
+    FROM ems_germany_analysis.{COST_TABLE} r
     JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
     WHERE r.total_cost_seconds IS NOT NULL
     GROUP BY r.gitter_id
@@ -78,12 +83,12 @@ SELECT
     c.a30bis49               AS pop_30to49,
     c.a50bis64               AS pop_50to64
 FROM min_times m
-JOIN zensus.alter_in_5_altersklassen_100m c ON c.gitter_id_100m = m.gitter_id
+JOIN zensus.alter_in_5_altersklassen_{RESOLUTION} c ON c.gitter_id_{RESOLUTION} = m.gitter_id
 WHERE c.insgesamt_bevoelkerung > 0;
 """
 
 # Census cell centroids for the map (WGS84)
-SQL_MAP_CELLS = """
+SQL_MAP_CELLS = f"""
 WITH min_times AS (
     SELECT
         r.gitter_id,
@@ -91,7 +96,7 @@ WITH min_times AS (
         MIN(CASE WHEN CAST(h.notfall AS float)::int = 2 THEN r.total_cost_seconds END) AS min_secs_l2,
         MIN(CASE WHEN CAST(h.notfall AS float)::int = 3 THEN r.total_cost_seconds END) AS min_secs_l3,
         MIN(r.total_cost_seconds)                                                        AS min_secs_any
-    FROM ems_germany_analysis.census_hospital_route r
+    FROM ems_germany_analysis.{COST_TABLE} r
     JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
     WHERE r.total_cost_seconds IS NOT NULL
     GROUP BY r.gitter_id
@@ -105,7 +110,7 @@ SELECT
     ROUND(m.min_secs_l3::numeric  / 60, 1)            AS min_min_l3,
     c.insgesamt_bevoelkerung                           AS population
 FROM min_times m
-JOIN zensus.alter_in_5_altersklassen_100m c ON c.gitter_id_100m = m.gitter_id
+JOIN zensus.alter_in_5_altersklassen_{RESOLUTION} c ON c.gitter_id_{RESOLUTION} = m.gitter_id
 WHERE c.insgesamt_bevoelkerung > 0;
 """
 
@@ -124,13 +129,25 @@ ORDER BY id;
 # Federal state breakdown — uses spatial join to place_polygon_nested
 # Filtered to known German Bundesland names to avoid matching sub-regions
 GERMAN_STATES = [
-    "Baden-Württemberg", "Bayern", "Berlin", "Brandenburg", "Bremen",
-    "Hamburg", "Hessen", "Mecklenburg-Vorpommern", "Niedersachsen",
-    "Nordrhein-Westfalen", "Rheinland-Pfalz", "Saarland", "Sachsen",
-    "Sachsen-Anhalt", "Schleswig-Holstein", "Thüringen",
+    "Rhineland-Palatinate",
+    "Saarland",
+    "North Rhine-Westphalia",
+    "Bremen",
+    "Lower Saxony",
+    "Brandenburg",
+    "Berlin",
+    "Saxony",
+    "Thuringia",
+    "Hesse",
+    "Bavaria",
+    "Baden-Württemberg",
+    "Schleswig-Holstein",
+    "Hamburg",
+    "Saxony-Anhalt",
+    "Mecklenburg-Vorpommern",
 ]
 
-SQL_STATES = """
+SQL_STATES = f"""
 WITH state_geoms AS (
     SELECT name, ST_Union(geom) AS geom
     FROM osm_germany.place_polygon_nested
@@ -142,7 +159,7 @@ min_times AS (
         r.gitter_id,
         CAST(h.notfall AS float)::int AS hospital_level,
         MIN(r.total_cost_seconds)     AS min_secs
-    FROM ems_germany_analysis.census_hospital_route r
+    FROM ems_germany_analysis.{COST_TABLE} r
     JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
     WHERE r.total_cost_seconds IS NOT NULL
     GROUP BY r.gitter_id, CAST(h.notfall AS float)::int
@@ -151,9 +168,14 @@ cell_state AS (
     SELECT
         t.*,
         c.insgesamt_bevoelkerung AS population,
+        c.a65undaelter           AS pop_65plus,
+        c.unter18                AS pop_under18,
+        c.a18bis29               AS pop_18to29,
+        c.a30bis49               AS pop_30to49,
+        c.a50bis64               AS pop_50to64,
         s.name                   AS state
     FROM min_times t
-    JOIN zensus.alter_in_5_altersklassen_100m c ON c.gitter_id_100m = t.gitter_id
+    JOIN zensus.alter_in_5_altersklassen_{RESOLUTION} c ON c.gitter_id_{RESOLUTION} = t.gitter_id
     JOIN state_geoms s ON ST_Within(c.geom, s.geom)
     WHERE c.insgesamt_bevoelkerung > 0
 )
@@ -162,6 +184,11 @@ SELECT
     hospital_level,
     COUNT(DISTINCT gitter_id)                                   AS census_cells,
     SUM(population)                                             AS total_population,
+    SUM(pop_65plus)                                             AS total_pop_65_plus,
+    SUM(pop_under18)                                            AS total_pop_under18,
+    SUM(pop_18to29)                                             AS total_pop_18to29,
+    SUM(pop_30to49)                                             AS total_pop_30to49,
+    SUM(pop_50to64)                                             AS total_pop_50to64,
     ROUND(AVG(min_secs)::numeric / 60, 1)                       AS avg_travel_min,
     ROUND(
         (PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY min_secs))::numeric / 60,
@@ -195,6 +222,30 @@ def fetch_df(conn: psycopg.Connection, sql: str, params=None) -> pd.DataFrame:
         cols = [d.name for d in cur.description]
         rows = cur.fetchall()
     return pd.DataFrame(rows, columns=cols)
+
+
+def _cache_dir() -> Path:
+    d = Path(platformdirs.user_cache_dir(APP_NAME))
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _fetch_cached(
+    conn: psycopg.Connection,
+    sql: str,
+    cache_path: Path,
+    use_cache: bool,
+    params=None,
+) -> pd.DataFrame:
+    """Load DataFrame from pickle cache if available; otherwise fetch from DB and cache."""
+    if use_cache and cache_path.exists():
+        click.echo(f"  → loaded from cache: {cache_path.name}")
+        with cache_path.open("rb") as fh:
+            return pickle.load(fh)  # noqa: S301
+    df = fetch_df(conn, sql, params)
+    with cache_path.open("wb") as fh:
+        pickle.dump(df, fh)
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -484,14 +535,9 @@ def render_html(
     chart_hist_html: str,
     chart_equity_html: str,
     chart_states_html: str,
-    cells_geojson: dict,
-    hospitals_geojson: dict,
     total_cells: int,
     data_note: str,
 ) -> str:
-    cells_json     = json.dumps(cells_geojson)
-    hospitals_json = json.dumps(hospitals_geojson)
-
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -781,8 +827,7 @@ def render_html(
 
 <script>
 // ── MapLibre setup ──
-const cellsGeoJSON     = {cells_json};
-const hospitalsGeoJSON = {hospitals_json};
+// GeoJSON data loaded from external files (cells.geojson, hospitals.geojson)
 
 const TRAVEL_COLOR = [
   "interpolate", ["linear"],
@@ -815,14 +860,23 @@ const map = new maplibregl.Map({{
   style: {{
     version: 8,
     sources: {{
-      osm: {{
+      "carto-base": {{
         type: "raster",
-        tiles: ["https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png"],
+        tiles: ["https://a.basemaps.cartocdn.com/light_nolabels/{{z}}/{{x}}/{{y}}.png",
+                "https://b.basemaps.cartocdn.com/light_nolabels/{{z}}/{{x}}/{{y}}.png",
+                "https://c.basemaps.cartocdn.com/light_nolabels/{{z}}/{{x}}/{{y}}.png"],
         tileSize: 256,
-        attribution: "© OpenStreetMap contributors",
+        attribution: "© <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors © <a href='https://carto.com/attributions'>CARTO</a>",
+      }},
+      "carto-labels": {{
+        type: "raster",
+        tiles: ["https://a.basemaps.cartocdn.com/light_only_labels/{{z}}/{{x}}/{{y}}.png",
+                "https://b.basemaps.cartocdn.com/light_only_labels/{{z}}/{{x}}/{{y}}.png",
+                "https://c.basemaps.cartocdn.com/light_only_labels/{{z}}/{{x}}/{{y}}.png"],
+        tileSize: 256,
       }},
     }},
-    layers: [{{ id: "osm", type: "raster", source: "osm" }}],
+    layers: [{{ id: "carto-base-layer", type: "raster", source: "carto-base" }}],
   }},
   center: [10.45, 51.2],
   zoom: 5.5,
@@ -832,7 +886,7 @@ map.addControl(new maplibregl.NavigationControl(), "top-right");
 
 map.on("load", () => {{
   // Census cells layer
-  map.addSource("cells", {{ type: "geojson", data: cellsGeoJSON }});
+  map.addSource("cells", {{ type: "geojson", data: "cells.geojson" }});
   map.addLayer({{
     id: "cells-layer",
     type: "circle",
@@ -845,7 +899,7 @@ map.on("load", () => {{
   }});
 
   // Hospital markers
-  map.addSource("hospitals", {{ type: "geojson", data: hospitalsGeoJSON }});
+  map.addSource("hospitals", {{ type: "geojson", data: "hospitals.geojson" }});
   map.addLayer({{
     id: "hospitals-layer",
     type: "circle",
@@ -863,6 +917,9 @@ map.on("load", () => {{
       "circle-stroke-color": "#fff",
     }},
   }});
+
+  // Labels on top of all data layers
+  map.addLayer({{ id: "carto-labels-layer", type: "raster", source: "carto-labels" }});
 
   // Popup for census cells
   const popup = new maplibregl.Popup({{ closeButton: false, closeOnClick: false }});
@@ -917,25 +974,13 @@ function toggleHospitals(visible) {{
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point
+# Main generate function
 # ---------------------------------------------------------------------------
 
-@click.command()
-@click.option(
-    "--dsn", required=True, envvar="EMSDE_DSN",
-    help="PostgreSQL connection string (or set EMSDE_DSN).",
-)
-@click.option(
-    "--output", default="accessibility_report.html",
-    type=click.Path(dir_okay=False, writable=True),
-    help="Output HTML file (default: accessibility_report.html).",
-)
-@click.option(
-    "--skip-states", is_flag=True,
-    help="Skip the federal state spatial join (slow for large datasets).",
-)
-def main(dsn: str, output: str, skip_states: bool) -> None:
-    """Generate a hospital accessibility report as a self-contained HTML file."""
+def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True) -> None:
+    """Generate a hospital accessibility report as a directory with index.html and GeoJSON files."""
+    cache_dir = _cache_dir()
+
     click.echo("Connecting to database…")
     try:
         conn = psycopg.connect(dsn)
@@ -945,20 +990,36 @@ def main(dsn: str, output: str, skip_states: bool) -> None:
 
     with conn:
         click.echo("Fetching summary statistics…")
-        df_summary = fetch_df(conn, SQL_SUMMARY)
+        df_summary = _fetch_cached(
+            conn, SQL_SUMMARY,
+            cache_dir / f"{COST_TABLE}_summary.pkl",
+            use_cache,
+        )
         if df_summary.empty:
             click.echo("No data found in census_hospital_route. Has routing been run?", err=True)
             sys.exit(1)
 
         click.echo("Fetching per-cell travel times…")
-        df_cell = fetch_df(conn, SQL_PER_CELL)
+        df_cell = _fetch_cached(
+            conn, SQL_PER_CELL,
+            cache_dir / f"{COST_TABLE}_per_cell.pkl",
+            use_cache,
+        )
         click.echo(f"  → {len(df_cell):,} census cells with data")
 
         click.echo("Fetching map data (census centroids)…")
-        df_map = fetch_df(conn, SQL_MAP_CELLS)
+        df_map = _fetch_cached(
+            conn, SQL_MAP_CELLS,
+            cache_dir / f"{COST_TABLE}_map_cells.pkl",
+            use_cache,
+        )
 
         click.echo("Fetching hospital locations…")
-        df_hospitals = fetch_df(conn, SQL_HOSPITALS_MAP)
+        df_hospitals = _fetch_cached(
+            conn, SQL_HOSPITALS_MAP,
+            cache_dir / f"{COST_TABLE}_hospitals_map.pkl",
+            use_cache,
+        )
 
         if skip_states:
             df_states = pd.DataFrame()
@@ -966,7 +1027,12 @@ def main(dsn: str, output: str, skip_states: bool) -> None:
         else:
             click.echo("Fetching federal state breakdown (this may take a moment)…")
             try:
-                df_states = fetch_df(conn, SQL_STATES, {"state_names": GERMAN_STATES})
+                df_states = _fetch_cached(
+                    conn, SQL_STATES,
+                    cache_dir / f"{COST_TABLE}_states.pkl",
+                    use_cache,
+                    params={"state_names": GERMAN_STATES},
+                )
                 click.echo(f"  → {len(df_states):,} state × level rows")
             except psycopg.Error as e:
                 click.echo(f"  State query failed ({e}); skipping.", err=True)
@@ -1001,16 +1067,22 @@ def main(dsn: str, output: str, skip_states: bool) -> None:
         chart_hist_html=c_hist,
         chart_equity_html=c_equity,
         chart_states_html=c_states,
-        cells_geojson=cells_geojson,
-        hospitals_geojson=hospitals_geojson,
         total_cells=len(df_map),
         data_note=data_note,
     )
 
-    Path(output).write_text(html, encoding="utf-8")
-    size_kb = Path(output).stat().st_size / 1024
-    click.echo(f"✓ Report written to: {output} ({size_kb:.0f} KB)")
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
+    cells_path     = out_dir / "cells.geojson"
+    hospitals_path = out_dir / "hospitals.geojson"
+    index_path     = out_dir / "index.html"
 
-if __name__ == "__main__":
-    main()
+    cells_path.write_text(json.dumps(cells_geojson), encoding="utf-8")
+    hospitals_path.write_text(json.dumps(hospitals_geojson), encoding="utf-8")
+    index_path.write_text(html, encoding="utf-8")
+
+    click.echo(f"  → cells.geojson     ({cells_path.stat().st_size / 1024:.0f} KB)")
+    click.echo(f"  → hospitals.geojson ({hospitals_path.stat().st_size / 1024:.0f} KB)")
+    click.echo(f"  → index.html        ({index_path.stat().st_size / 1024:.0f} KB)")
+    click.echo(f"Report written to: {out_dir}/")

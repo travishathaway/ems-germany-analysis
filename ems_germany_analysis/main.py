@@ -4,14 +4,13 @@ import sys
 
 import click
 
-from .constants import (
-    APP_NAME,
-    ResolutionSuffix,
-    CENSUS_HOSPITAL_ROUTE_TABLE_100M,
-    CENSUS_HOSPITAL_ROUTE_TABLE_1KM,
-    CENSUS_HOSPITAL_ROUTE_TABLE_10KM
+from .constants import APP_NAME, ResolutionSuffix
+from .report import generate as generate_report_html
+from .routines import (
+    ors_routing_analyze,
+    ors_routing_analyze_from_census_point,
+    pgrouting_analyze
 )
-from .routines import ors_routing_analyze, pgrouting_analyze
 
 
 def _setup_logging(log_file: str | None) -> None:
@@ -105,7 +104,14 @@ def pgr_analyze(hospital_id, dsn, skip_network, log_file):
     envvar="EMSDE_RESOLUTION",
     help="Resolution to use when select census points to calculate (or set EMSDE_RESOLUTION env var).",
 )
-def ors_analyze(dsn, ors_url, hospital_table, log_file, buffer, resolution):
+@click.option(
+    "--method",
+    default="hospital",
+    type=click.Choice(["hospital", "census"]),
+    envvar="EMSDE_METHOD",
+    help="Whether to route from hospitals outward or from census points inward.",
+)
+def ors_analyze(dsn, ors_url, hospital_table, log_file, buffer, resolution, method):
     """
     Use open routing service to generate cost calculations
 
@@ -122,13 +128,43 @@ def ors_analyze(dsn, ors_url, hospital_table, log_file, buffer, resolution):
     except ValueError as e:
         raise click.ClickException(f"{e!r}")
 
-    asyncio.run(
-        ors_routing_analyze(
-            dsn, ors_url, hospital_table, buffer, resolution
-        )
-    )
+    if method == "census":
+        asyncio.run(ors_routing_analyze_from_census_point(dsn, ors_url, hospital_table, resolution))
+    else:
+        asyncio.run(ors_routing_analyze(dsn, ors_url, hospital_table, buffer, resolution))
 
     logger.info("Import Finished")
+
+
+@emsde.command()
+@click.option(
+    "--dsn",
+    required=True,
+    envvar="EMSDE_DSN",
+    help="PostgreSQL connection string (or set EMSDE_DSN env var)."
+)
+@click.option(
+    "--output",
+    default="accessibility_report",
+    type=click.Path(file_okay=False, writable=True),
+    help="Output directory (default: accessibility_report).",
+)
+@click.option(
+    "--skip-states",
+    is_flag=True,
+    help="Skip the federal state spatial join (slow for large datasets).",
+)
+@click.option(
+    "--no-cache",
+    is_flag=True,
+    help="Force re-fetch all data from the database, ignoring cached DataFrames.",
+)
+def report(dsn, output, skip_states, no_cache):
+    """
+    Generate a hospital accessibility report as a directory containing
+    index.html and GeoJSON data files.
+    """
+    generate_report_html(dsn, output, skip_states, use_cache=not no_cache)
 
 
 if __name__ == "__main__":

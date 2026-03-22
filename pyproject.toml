@@ -11,6 +11,7 @@ dependencies = [
     "httpx>=0.27",
     "plotly>=6.6.0",
     "pandas>=3.0.1",
+    "platformdirs>=4.9.4",
 ]
 
 

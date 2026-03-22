@@ -12,6 +12,9 @@ from .constants import (
     CENSUS_HOSPITAL_ROUTE_TABLE_100M,
     CENSUS_HOSPITAL_ROUTE_TABLE_1KM,
     CENSUS_HOSPITAL_ROUTE_TABLE_10KM,
+    CENSUS_HOSPITAL_ROUTE_TABLE_FROM_CENSUS_100M,
+    CENSUS_HOSPITAL_ROUTE_TABLE_FROM_CENSUS_1KM,
+    CENSUS_HOSPITAL_ROUTE_TABLE_FROM_CENSUS_10KM,
     ResolutionSuffix
 )
 from .errors import EmsGermanyError
@@ -72,6 +75,27 @@ async def create_tables(
                     await create_route_cost_table(cursor, CENSUS_HOSPITAL_ROUTE_TABLE_10KM, schema=schema)
 
             logger.info("done creating tables")
+        except psycopg.Error as e:
+            raise EmsGermanyError(f"Error creating tables: {e!s}")
+
+
+async def create_tables_from_census(
+    conn: psycopg.AsyncConnection,
+    resolution: ResolutionSuffix,
+    schema: str = "public"
+) -> None:
+    """
+    Create all tables needed for the from-census analysis.
+    """
+    async with conn.cursor() as cursor:
+        try:
+            match resolution:
+                case ResolutionSuffix.m100:
+                    await create_route_cost_table(cursor, CENSUS_HOSPITAL_ROUTE_TABLE_FROM_CENSUS_100M, schema=schema)
+                case ResolutionSuffix.km1:
+                    await create_route_cost_table(cursor, CENSUS_HOSPITAL_ROUTE_TABLE_FROM_CENSUS_1KM, schema=schema)
+                case ResolutionSuffix.km10:
+                    await create_route_cost_table(cursor, CENSUS_HOSPITAL_ROUTE_TABLE_FROM_CENSUS_10KM, schema=schema)
         except psycopg.Error as e:
             raise EmsGermanyError(f"Error creating tables: {e!s}")
 
