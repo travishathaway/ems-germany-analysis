@@ -796,9 +796,18 @@ def render_html(
         <div class="legend-labels"><span>0</span><span>15</span><span>30</span><span>45</span><span>60+</span></div>
         <br>
         <strong>Hospitals</strong>
-        <div class="legend-row"><div class="legend-dot" style="background:#4dac26"></div> Level 1</div>
-        <div class="legend-row"><div class="legend-dot" style="background:#f1b614"></div> Level 2</div>
-        <div class="legend-row"><div class="legend-dot" style="background:#d7191c"></div> Level 3</div>
+        <div class="legend-row">
+          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#6b9ec7"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">1</text></svg>
+          Level 1
+        </div>
+        <div class="legend-row">
+          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#9b7dbf"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">2</text></svg>
+          Level 2
+        </div>
+        <div class="legend-row">
+          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#c4744d"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">3</text></svg>
+          Level 3
+        </div>
       </div>
     </div>
   </section>
@@ -853,7 +862,7 @@ function makeTravelColor(prop) {{
   ];
 }}
 
-const HOSPITAL_COLORS = {{"1": "#4dac26", "2": "#f1b614", "3": "#d7191c"}};
+const HOSPITAL_COLORS = {{"1": "#6b9ec7", "2": "#9b7dbf", "3": "#c4744d"}};
 
 const map = new maplibregl.Map({{
   container: "map",
@@ -884,7 +893,38 @@ const map = new maplibregl.Map({{
 
 map.addControl(new maplibregl.NavigationControl(), "top-right");
 
+// Draw a numbered circle icon onto a canvas and return ImageData for map.addImage()
+function makeHospitalIcon(label, color) {{
+  const size = 20;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  const r = size / 2;
+
+  // Colored filled circle
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(r, r, r - 1, 0, Math.PI * 2);
+  ctx.fill();
+
+  // White number centered in the circle
+  ctx.fillStyle = "#fff";
+  ctx.font = `bold ${{size * 0.55}}px Arial, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, r, r + 0.5);
+
+  const img = ctx.getImageData(0, 0, size, size);
+  return {{ width: size, height: size, data: img.data }};
+}}
+
 map.on("load", () => {{
+  // Register hospital icons — numbered by level, all the same size
+  map.addImage("hospital-1", makeHospitalIcon("1", "#6b9ec7"));
+  map.addImage("hospital-2", makeHospitalIcon("2", "#9b7dbf"));
+  map.addImage("hospital-3", makeHospitalIcon("3", "#c4744d"));
+
   // Census cells layer
   map.addSource("cells", {{ type: "geojson", data: "cells.geojson" }});
   map.addLayer({{
@@ -898,23 +938,21 @@ map.on("load", () => {{
     }},
   }});
 
-  // Hospital markers
+  // Hospital markers — symbol layer using canvas-drawn cross icons
   map.addSource("hospitals", {{ type: "geojson", data: "hospitals.geojson" }});
   map.addLayer({{
     id: "hospitals-layer",
-    type: "circle",
+    type: "symbol",
     source: "hospitals",
-    paint: {{
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 5, 10, 10],
-      "circle-color": [
+    layout: {{
+      "icon-image": [
         "match", ["to-string", ["get", "level"]],
-        "1", "#4dac26",
-        "2", "#f1b614",
-        "3", "#d7191c",
-        "#999"
+        "1", "hospital-1",
+        "2", "hospital-2",
+        "hospital-3"
       ],
-      "circle-stroke-width": 1.5,
-      "circle-stroke-color": "#fff",
+      "icon-allow-overlap": true,
+      "icon-ignore-placement": true,
     }},
   }});
 
