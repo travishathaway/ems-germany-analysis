@@ -159,12 +159,18 @@ def ors_analyze(dsn, ors_url, hospital_table, log_file, buffer, resolution, meth
     is_flag=True,
     help="Force re-fetch all data from the database, ignoring cached DataFrames.",
 )
-def report(dsn, output, skip_states, no_cache):
+@click.option(
+    "--resolution",
+    default="1km",
+    envvar="EMSDE_RESOLUTION",
+    help="Census grid resolution to use for the report (default: 1km).",
+)
+def report(dsn, output, skip_states, no_cache, resolution):
     """
     Generate a hospital accessibility report as a directory containing
     index.html and GeoJSON data files.
     """
-    generate_report_html(dsn, output, skip_states, use_cache=not no_cache)
+    generate_report_html(dsn, output, skip_states, use_cache=not no_cache, resolution=resolution)
 
 
 if __name__ == "__main__":

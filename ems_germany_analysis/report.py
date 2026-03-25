@@ -22,14 +22,8 @@ from .constants import APP_NAME
 # SQL queries
 # ---------------------------------------------------------------------------
 
-#: Resolution of census point data
-RESOLUTION = "1km"
-
-#: Table used to store cost calculations
-COST_TABLE = f"census_hospital_route_from_census_{RESOLUTION}"
-
 # Overall summary: one row per hospital level
-SQL_SUMMARY = f"""
+SQL_SUMMARY = """
 SELECT
     CAST(h.notfall AS float)::int         AS hospital_level,
     COUNT(DISTINCT r.hospital_id)          AS hospital_count,
@@ -49,7 +43,7 @@ SELECT
         / NULLIF(COUNT(*), 0),
         1
     )                                                     AS pct_routes_30min
-FROM ems_germany_analysis.{COST_TABLE} r
+FROM ems_germany_analysis.{cost_table} r
 JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
 WHERE r.total_cost_seconds IS NOT NULL
 GROUP BY CAST(h.notfall AS float)::int
@@ -57,7 +51,7 @@ ORDER BY 1;
 """
 
 # Per census cell: minimum travel time to nearest hospital of each level
-SQL_PER_CELL = f"""
+SQL_PER_CELL = """
 WITH min_times AS (
     SELECT
         r.gitter_id,
@@ -65,7 +59,7 @@ WITH min_times AS (
         MIN(CASE WHEN CAST(h.notfall AS float)::int = 2 THEN r.total_cost_seconds END) AS min_secs_l2,
         MIN(CASE WHEN CAST(h.notfall AS float)::int = 3 THEN r.total_cost_seconds END) AS min_secs_l3,
         MIN(r.total_cost_seconds)                                                        AS min_secs_any
-    FROM ems_germany_analysis.{COST_TABLE} r
+    FROM ems_germany_analysis.{cost_table} r
     JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
     WHERE r.total_cost_seconds IS NOT NULL
     GROUP BY r.gitter_id
@@ -83,12 +77,12 @@ SELECT
     c.a30bis49               AS pop_30to49,
     c.a50bis64               AS pop_50to64
 FROM min_times m
-JOIN zensus.alter_in_5_altersklassen_{RESOLUTION} c ON c.gitter_id_{RESOLUTION} = m.gitter_id
+JOIN zensus.alter_in_5_altersklassen_{resolution} c ON c.gitter_id_{resolution} = m.gitter_id
 WHERE c.insgesamt_bevoelkerung > 0;
 """
 
 # Census cell centroids for the map (WGS84)
-SQL_MAP_CELLS = f"""
+SQL_MAP_CELLS = """
 WITH min_times AS (
     SELECT
         r.gitter_id,
@@ -96,7 +90,7 @@ WITH min_times AS (
         MIN(CASE WHEN CAST(h.notfall AS float)::int = 2 THEN r.total_cost_seconds END) AS min_secs_l2,
         MIN(CASE WHEN CAST(h.notfall AS float)::int = 3 THEN r.total_cost_seconds END) AS min_secs_l3,
         MIN(r.total_cost_seconds)                                                        AS min_secs_any
-    FROM ems_germany_analysis.{COST_TABLE} r
+    FROM ems_germany_analysis.{cost_table} r
     JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
     WHERE r.total_cost_seconds IS NOT NULL
     GROUP BY r.gitter_id
@@ -108,9 +102,14 @@ SELECT
     ROUND(m.min_secs_l1::numeric  / 60, 1)            AS min_min_l1,
     ROUND(m.min_secs_l2::numeric  / 60, 1)            AS min_min_l2,
     ROUND(m.min_secs_l3::numeric  / 60, 1)            AS min_min_l3,
-    c.insgesamt_bevoelkerung                           AS population
+    c.insgesamt_bevoelkerung                           AS population,
+    c.a65undaelter                                     AS pop_65plus,
+    c.unter18                                          AS pop_under18,
+    c.a18bis29                                         AS pop_18to29,
+    c.a30bis49                                         AS pop_30to49,
+    c.a50bis64                                         AS pop_50to64
 FROM min_times m
-JOIN zensus.alter_in_5_altersklassen_{RESOLUTION} c ON c.gitter_id_{RESOLUTION} = m.gitter_id
+JOIN zensus.alter_in_5_altersklassen_{resolution} c ON c.gitter_id_{resolution} = m.gitter_id
 WHERE c.insgesamt_bevoelkerung > 0;
 """
 
@@ -147,7 +146,7 @@ GERMAN_STATES = [
     "Mecklenburg-Vorpommern",
 ]
 
-SQL_STATES = f"""
+SQL_STATES = """
 WITH state_geoms AS (
     SELECT name, ST_Union(geom) AS geom
     FROM osm_germany.place_polygon_nested
@@ -159,7 +158,7 @@ min_times AS (
         r.gitter_id,
         CAST(h.notfall AS float)::int AS hospital_level,
         MIN(r.total_cost_seconds)     AS min_secs
-    FROM ems_germany_analysis.{COST_TABLE} r
+    FROM ems_germany_analysis.{cost_table} r
     JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
     WHERE r.total_cost_seconds IS NOT NULL
     GROUP BY r.gitter_id, CAST(h.notfall AS float)::int
@@ -175,7 +174,7 @@ cell_state AS (
         c.a50bis64               AS pop_50to64,
         s.name                   AS state
     FROM min_times t
-    JOIN zensus.alter_in_5_altersklassen_{RESOLUTION} c ON c.gitter_id_{RESOLUTION} = t.gitter_id
+    JOIN zensus.alter_in_5_altersklassen_{resolution} c ON c.gitter_id_{resolution} = t.gitter_id
     JOIN state_geoms s ON ST_Within(c.geom, s.geom)
     WHERE c.insgesamt_bevoelkerung > 0
 )
@@ -495,11 +494,16 @@ def build_map_geojson(df_map: pd.DataFrame) -> dict:
     features = []
     for _, row in df_map.iterrows():
         props = {
-            "min_any": None if pd.isna(row["min_min_any"]) else float(row["min_min_any"]),
-            "min_l1":  None if pd.isna(row["min_min_l1"])  else float(row["min_min_l1"]),
-            "min_l2":  None if pd.isna(row["min_min_l2"])  else float(row["min_min_l2"]),
-            "min_l3":  None if pd.isna(row["min_min_l3"])  else float(row["min_min_l3"]),
-            "pop":     int(row["population"]),
+            "min_any":     None if pd.isna(row["min_min_any"]) else float(row["min_min_any"]),
+            "min_l1":      None if pd.isna(row["min_min_l1"])  else float(row["min_min_l1"]),
+            "min_l2":      None if pd.isna(row["min_min_l2"])  else float(row["min_min_l2"]),
+            "min_l3":      None if pd.isna(row["min_min_l3"])  else float(row["min_min_l3"]),
+            "pop":         int(row["population"]),
+            "pop_65plus":  int(row["pop_65plus"])  if not pd.isna(row["pop_65plus"])  else 0,
+            "pop_under18": int(row["pop_under18"]) if not pd.isna(row["pop_under18"]) else 0,
+            "pop_18to29":  int(row["pop_18to29"])  if not pd.isna(row["pop_18to29"])  else 0,
+            "pop_30to49":  int(row["pop_30to49"])  if not pd.isna(row["pop_30to49"])  else 0,
+            "pop_50to64":  int(row["pop_50to64"])  if not pd.isna(row["pop_50to64"])  else 0,
         }
         features.append({
             "type": "Feature",
@@ -537,6 +541,7 @@ def render_html(
     chart_states_html: str,
     total_cells: int,
     data_note: str,
+    resolution: str = "1km",
 ) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -714,7 +719,7 @@ def render_html(
 
 <header>
   <h1>Hospital Accessibility Analysis — Germany</h1>
-  <p>Travel time from census population grid (100 m) to emergency hospitals by care level</p>
+  <p>Travel time from census population grid ({resolution}) to emergency hospitals by care level</p>
 </header>
 
 <nav>
@@ -734,7 +739,7 @@ def render_html(
   <section id="summary">
     <h2>Summary Statistics</h2>
     <p class="section-desc">
-      Each census grid cell (100 m × 100 m) is matched to all hospitals within 15 km.
+      Each census grid cell ({resolution} × {resolution}) is matched to all hospitals within 15 km.
       Travel times are driving durations in seconds computed via road network routing.
       Hospital levels: <strong>Level 1</strong> (basic emergency care),
       <strong>Level 2</strong> (advanced), <strong>Level 3</strong> (comprehensive / trauma centre).
@@ -967,11 +972,19 @@ map.on("load", () => {{
     const fmt = (v) => v == null || v >= 999 ? "n/a" : v.toFixed(1) + " min";
     popup.setLngLat(e.lngLat).setHTML(`
       <div style="font-size:12px;line-height:1.6">
-        <strong>Population:</strong> ${{p.pop}}<br>
-        <strong>Any hospital:</strong> ${{fmt(p.min_any)}}<br>
-        <strong>Level 1:</strong> ${{fmt(p.min_l1)}}<br>
-        <strong>Level 2:</strong> ${{fmt(p.min_l2)}}<br>
-        <strong>Level 3:</strong> ${{fmt(p.min_l3)}}
+        <strong>Travel time</strong><br>
+        Any hospital: ${{fmt(p.min_any)}}<br>
+        Level 1: ${{fmt(p.min_l1)}}<br>
+        Level 2: ${{fmt(p.min_l2)}}<br>
+        Level 3: ${{fmt(p.min_l3)}}
+        <hr style="margin:4px 0;border-color:#ddd">
+        <strong>Population</strong><br>
+        Total: ${{p.pop}}<br>
+        Under 18: ${{p.pop_under18}}<br>
+        18–29: ${{p.pop_18to29}}<br>
+        30–49: ${{p.pop_30to49}}<br>
+        50–64: ${{p.pop_50to64}}<br>
+        65+: ${{p.pop_65plus}}
       </div>
     `).addTo(map);
   }});
@@ -1015,9 +1028,14 @@ function toggleHospitals(visible) {{
 # Main generate function
 # ---------------------------------------------------------------------------
 
-def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True) -> None:
+def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, resolution: str = "1km") -> None:
     """Generate a hospital accessibility report as a directory with index.html and GeoJSON files."""
     cache_dir = _cache_dir()
+    cost_table = f"census_hospital_route_from_census_{resolution}"
+    sql_summary = SQL_SUMMARY.format(cost_table=cost_table)
+    sql_per_cell = SQL_PER_CELL.format(cost_table=cost_table, resolution=resolution)
+    sql_map_cells = SQL_MAP_CELLS.format(cost_table=cost_table, resolution=resolution)
+    sql_states = SQL_STATES.format(cost_table=cost_table, resolution=resolution)
 
     click.echo("Connecting to database…")
     try:
@@ -1029,8 +1047,8 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True) -
     with conn:
         click.echo("Fetching summary statistics…")
         df_summary = _fetch_cached(
-            conn, SQL_SUMMARY,
-            cache_dir / f"{COST_TABLE}_summary.pkl",
+            conn, sql_summary,
+            cache_dir / f"{cost_table}_summary.pkl",
             use_cache,
         )
         if df_summary.empty:
@@ -1039,23 +1057,23 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True) -
 
         click.echo("Fetching per-cell travel times…")
         df_cell = _fetch_cached(
-            conn, SQL_PER_CELL,
-            cache_dir / f"{COST_TABLE}_per_cell.pkl",
+            conn, sql_per_cell,
+            cache_dir / f"{cost_table}_per_cell.pkl",
             use_cache,
         )
         click.echo(f"  → {len(df_cell):,} census cells with data")
 
         click.echo("Fetching map data (census centroids)…")
         df_map = _fetch_cached(
-            conn, SQL_MAP_CELLS,
-            cache_dir / f"{COST_TABLE}_map_cells.pkl",
+            conn, sql_map_cells,
+            cache_dir / f"{cost_table}_map_cells.pkl",
             use_cache,
         )
 
         click.echo("Fetching hospital locations…")
         df_hospitals = _fetch_cached(
             conn, SQL_HOSPITALS_MAP,
-            cache_dir / f"{COST_TABLE}_hospitals_map.pkl",
+            cache_dir / f"{cost_table}_hospitals_map.pkl",
             use_cache,
         )
 
@@ -1066,8 +1084,8 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True) -
             click.echo("Fetching federal state breakdown (this may take a moment)…")
             try:
                 df_states = _fetch_cached(
-                    conn, SQL_STATES,
-                    cache_dir / f"{COST_TABLE}_states.pkl",
+                    conn, sql_states,
+                    cache_dir / f"{cost_table}_states.pkl",
                     use_cache,
                     params={"state_names": GERMAN_STATES},
                 )
@@ -1107,6 +1125,7 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True) -
         chart_states_html=c_states,
         total_cells=len(df_map),
         data_note=data_note,
+        resolution=resolution,
     )
 
     out_dir = Path(output)
