@@ -1,7 +1,7 @@
 [project]
 name = "ems-germany-analysis"
 version = "0.1.0"
-description = "Add your description here"
+description = "CLI program that runs the analysis and generates a report for emergency medical service access in Germany"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -13,7 +13,6 @@ dependencies = [
     "pandas>=3.0.1",
     "platformdirs>=4.9.4",
 ]
-
 
 [project.scripts]
 emsde = "ems_germany_analysis.main:emsde"

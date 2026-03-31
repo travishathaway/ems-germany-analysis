@@ -2,11 +2,15 @@
 Generate a hospital accessibility report for Germany.
 
 Produces a directory containing index.html with interactive charts (Plotly),
-an interactive map (MapLibre GL JS), and GeoJSON data files loaded dynamically.
+an interactive map (MapLibre GL JS), and PMTiles hexagon data files.
 """
+import importlib.resources
 import json
 import pickle
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import click
@@ -17,6 +21,7 @@ import psycopg
 from plotly.subplots import make_subplots
 
 from .constants import APP_NAME
+from .db import create_hex_tables_sync
 
 # ---------------------------------------------------------------------------
 # SQL queries
@@ -76,38 +81,6 @@ SELECT
     c.a18bis29               AS pop_18to29,
     c.a30bis49               AS pop_30to49,
     c.a50bis64               AS pop_50to64
-FROM min_times m
-JOIN zensus.alter_in_5_altersklassen_{resolution} c ON c.gitter_id_{resolution} = m.gitter_id
-WHERE c.insgesamt_bevoelkerung > 0;
-"""
-
-# Census cell centroids for the map (WGS84)
-SQL_MAP_CELLS = """
-WITH min_times AS (
-    SELECT
-        r.gitter_id,
-        MIN(CASE WHEN CAST(h.notfall AS float)::int = 1 THEN r.total_cost_seconds END) AS min_secs_l1,
-        MIN(CASE WHEN CAST(h.notfall AS float)::int = 2 THEN r.total_cost_seconds END) AS min_secs_l2,
-        MIN(CASE WHEN CAST(h.notfall AS float)::int = 3 THEN r.total_cost_seconds END) AS min_secs_l3,
-        MIN(r.total_cost_seconds)                                                        AS min_secs_any
-    FROM ems_germany_analysis.{cost_table} r
-    JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
-    WHERE r.total_cost_seconds IS NOT NULL
-    GROUP BY r.gitter_id
-)
-SELECT
-    ST_X(ST_Transform(ST_Centroid(c.geom), 4326))     AS lon,
-    ST_Y(ST_Transform(ST_Centroid(c.geom), 4326))     AS lat,
-    ROUND(m.min_secs_any::numeric / 60, 1)            AS min_min_any,
-    ROUND(m.min_secs_l1::numeric  / 60, 1)            AS min_min_l1,
-    ROUND(m.min_secs_l2::numeric  / 60, 1)            AS min_min_l2,
-    ROUND(m.min_secs_l3::numeric  / 60, 1)            AS min_min_l3,
-    c.insgesamt_bevoelkerung                           AS population,
-    c.a65undaelter                                     AS pop_65plus,
-    c.unter18                                          AS pop_under18,
-    c.a18bis29                                         AS pop_18to29,
-    c.a30bis49                                         AS pop_30to49,
-    c.a50bis64                                         AS pop_50to64
 FROM min_times m
 JOIN zensus.alter_in_5_altersklassen_{resolution} c ON c.gitter_id_{resolution} = m.gitter_id
 WHERE c.insgesamt_bevoelkerung > 0;
@@ -486,32 +459,92 @@ def render_summary_table(df_summary: pd.DataFrame) -> str:
 
 
 # ---------------------------------------------------------------------------
-# MapLibre map
+# PMTiles generation
 # ---------------------------------------------------------------------------
 
-def build_map_geojson(df_map: pd.DataFrame) -> dict:
-    """Convert map DataFrame to a GeoJSON FeatureCollection."""
-    features = []
-    for _, row in df_map.iterrows():
-        props = {
-            "min_any":     None if pd.isna(row["min_min_any"]) else float(row["min_min_any"]),
-            "min_l1":      None if pd.isna(row["min_min_l1"])  else float(row["min_min_l1"]),
-            "min_l2":      None if pd.isna(row["min_min_l2"])  else float(row["min_min_l2"]),
-            "min_l3":      None if pd.isna(row["min_min_l3"])  else float(row["min_min_l3"]),
-            "pop":         int(row["population"]),
-            "pop_65plus":  int(row["pop_65plus"])  if not pd.isna(row["pop_65plus"])  else 0,
-            "pop_under18": int(row["pop_under18"]) if not pd.isna(row["pop_under18"]) else 0,
-            "pop_18to29":  int(row["pop_18to29"])  if not pd.isna(row["pop_18to29"])  else 0,
-            "pop_30to49":  int(row["pop_30to49"])  if not pd.isna(row["pop_30to49"])  else 0,
-            "pop_50to64":  int(row["pop_50to64"])  if not pd.isna(row["pop_50to64"])  else 0,
-        }
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [float(row["lon"]), float(row["lat"])]},
-            "properties": props,
-        })
-    return {"type": "FeatureCollection", "features": features}
+def _write_hex_geojson(conn: psycopg.Connection, table: str, output_path: Path) -> int:
+    """Stream hex travel table rows to a GeoJSON file. Returns feature count."""
+    sql = f"""
+        SELECT
+            ST_AsGeoJSON(ST_Transform(geom, 4326)),
+            avg_travel_any, avg_travel_l1, avg_travel_l2, avg_travel_l3,
+            total_population, pop_under18, pop_18to29, pop_30to49, pop_50to64, pop_65plus
+        FROM ems_germany_analysis.{table}
+    """
+    count = 0
+    with output_path.open("w", encoding="utf-8") as f:
+        f.write('{"type":"FeatureCollection","features":[')
+        first = True
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            for row in cur:
+                if not first:
+                    f.write(",")
+                first = False
+                props = {
+                    "avg_travel_any": float(row[1]) if row[1] is not None else None,
+                    "avg_travel_l1":  float(row[2]) if row[2] is not None else None,
+                    "avg_travel_l2":  float(row[3]) if row[3] is not None else None,
+                    "avg_travel_l3":  float(row[4]) if row[4] is not None else None,
+                    "total_population": int(row[5]) if row[5] is not None else 0,
+                    "pop_under18":    int(row[6])  if row[6]  is not None else 0,
+                    "pop_18to29":     int(row[7])  if row[7]  is not None else 0,
+                    "pop_30to49":     int(row[8])  if row[8]  is not None else 0,
+                    "pop_50to64":     int(row[9])  if row[9]  is not None else 0,
+                    "pop_65plus":     int(row[10]) if row[10] is not None else 0,
+                }
+                f.write(json.dumps({
+                    "type": "Feature",
+                    "geometry": json.loads(row[0]),
+                    "properties": props,
+                }))
+                count += 1
+        f.write("]}")
+    return count
 
+
+def generate_pmtiles(conn: psycopg.Connection, out_dir: Path) -> None:
+    """Export hex travel tables to GeoJSON and tile with tippecanoe."""
+    pmtiles_dir = out_dir / "pmtiles"
+    pmtiles_dir.mkdir(exist_ok=True)
+
+    configs = [
+        ("hex_travel_5km",  "hex_5km",  0,  9),
+        ("hex_travel_1km",  "hex_1km",  7, 12),
+        ("hex_travel_100m", "hex_100m", 10, 14),
+    ]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        for table, name, zoom_min, zoom_max in configs:
+            click.echo(f"  → Exporting {table} to GeoJSON…")
+            geojson_path = tmp_path / f"{name}.geojson"
+            count = _write_hex_geojson(conn, table, geojson_path)
+            click.echo(f"    {count:,} features")
+
+            pmtiles_path = pmtiles_dir / f"{name}.pmtiles"
+            click.echo(f"  → Tiling {name}.pmtiles (z{zoom_min}–z{zoom_max})…")
+            subprocess.run(
+                [
+                    "tippecanoe",
+                    "-o", str(pmtiles_path),
+                    f"-Z{zoom_min}", f"-z{zoom_max}",
+                    "-l", name,
+                    "--drop-densest-as-needed",
+                    "--extend-zooms-if-still-dropping",
+                    "-P",
+                    "-f",
+                    str(geojson_path),
+                ],
+                check=True,
+            )
+            size_mb = pmtiles_path.stat().st_size / 1024 / 1024
+            click.echo(f"    → {pmtiles_path.name} ({size_mb:.1f} MB)")
+
+
+# ---------------------------------------------------------------------------
+# Hospital GeoJSON
+# ---------------------------------------------------------------------------
 
 def build_hospitals_geojson(df_hospitals: pd.DataFrame) -> dict:
     features = []
@@ -528,11 +561,12 @@ def build_hospitals_geojson(df_hospitals: pd.DataFrame) -> dict:
     return {"type": "FeatureCollection", "features": features}
 
 
+
 # ---------------------------------------------------------------------------
 # HTML assembly
 # ---------------------------------------------------------------------------
 
-def render_html(
+def render_report(
     summary_table_html: str,
     chart_coverage: str,
     chart_cdf_html: str,
@@ -543,485 +577,21 @@ def render_html(
     data_note: str,
     resolution: str = "1km",
 ) -> str:
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hospital Accessibility in Germany</title>
-  <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
-  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
-  <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet" />
-  <style>
-    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{
-      font-family: "Helvetica Neue", Arial, sans-serif;
-      color: #333;
-      background: #f7f7f7;
-      line-height: 1.5;
-    }}
-    header {{
-      background: #1a3a5c;
-      color: #fff;
-      padding: 28px 40px;
-    }}
-    header h1 {{ font-size: 1.8rem; font-weight: 600; }}
-    header p  {{ margin-top: 6px; opacity: 0.8; font-size: 0.95rem; }}
-
-    nav {{
-      background: #fff;
-      border-bottom: 1px solid #ddd;
-      padding: 0 40px;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }}
-    nav ul {{ display: flex; gap: 0; list-style: none; }}
-    nav ul li a {{
-      display: block;
-      padding: 14px 18px;
-      text-decoration: none;
-      color: #555;
-      font-size: 0.88rem;
-      font-weight: 500;
-      border-bottom: 3px solid transparent;
-      transition: color 0.15s, border-color 0.15s;
-    }}
-    nav ul li a:hover {{ color: #1a3a5c; border-color: #1a3a5c; }}
-
-    main {{ max-width: 1200px; margin: 0 auto; padding: 40px 20px; }}
-
-    section {{
-      background: #fff;
-      border-radius: 8px;
-      box-shadow: 0 1px 4px rgba(0,0,0,.08);
-      padding: 32px;
-      margin-bottom: 32px;
-    }}
-    h2 {{
-      font-size: 1.25rem;
-      font-weight: 600;
-      color: #1a3a5c;
-      margin-bottom: 6px;
-    }}
-    .section-desc {{
-      color: #666;
-      font-size: 0.9rem;
-      margin-bottom: 20px;
-    }}
-    .data-note {{
-      background: #fff8e1;
-      border-left: 4px solid #f1b614;
-      padding: 10px 14px;
-      border-radius: 4px;
-      font-size: 0.85rem;
-      color: #7a6000;
-      margin-bottom: 20px;
-    }}
-
-    /* Summary table */
-    .summary-table {{
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.9rem;
-    }}
-    .summary-table th {{
-      background: #1a3a5c;
-      color: #fff;
-      padding: 10px 14px;
-      text-align: left;
-      font-weight: 500;
-    }}
-    .summary-table td {{
-      padding: 9px 14px;
-      border-bottom: 1px solid #eee;
-    }}
-    .summary-table tr:hover td {{ background: #f5f8ff; }}
-    .level-badge {{
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-size: 0.82rem;
-      font-weight: 600;
-      color: #fff;
-    }}
-    .level-1 {{ background: #4dac26; }}
-    .level-2 {{ background: #f1b614; color: #333; }}
-    .level-3 {{ background: #d7191c; }}
-
-    /* Map */
-    #map-container {{
-      position: relative;
-      height: 560px;
-      border-radius: 6px;
-      overflow: hidden;
-    }}
-    #map {{ width: 100%; height: 100%; }}
-    #map-controls {{
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      background: rgba(255,255,255,0.95);
-      padding: 12px 16px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      z-index: 10;
-      font-size: 0.85rem;
-    }}
-    #map-controls strong {{ display: block; margin-bottom: 8px; color: #1a3a5c; }}
-    .map-btn {{
-      display: block;
-      width: 100%;
-      margin-bottom: 5px;
-      padding: 5px 10px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      background: #f5f5f5;
-      cursor: pointer;
-      font-size: 0.82rem;
-      text-align: left;
-      transition: background 0.15s;
-    }}
-    .map-btn.active {{ background: #1a3a5c; color: #fff; border-color: #1a3a5c; }}
-    .map-btn:hover:not(.active) {{ background: #e8eef5; }}
-    #map-legend {{
-      position: absolute;
-      bottom: 30px;
-      right: 12px;
-      background: rgba(255,255,255,0.95);
-      padding: 10px 14px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      z-index: 10;
-      font-size: 0.82rem;
-    }}
-    #map-legend strong {{ display: block; margin-bottom: 6px; color: #1a3a5c; }}
-    .legend-row {{ display: flex; align-items: center; gap: 8px; margin: 3px 0; }}
-    .legend-dot {{
-      width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
-    }}
-    .legend-grad {{
-      width: 130px; height: 12px; border-radius: 3px;
-      background: linear-gradient(to right, #1a9641, #a6d96a, #ffffbf, #fdae61, #d7191c);
-    }}
-    .legend-labels {{ display: flex; justify-content: space-between; font-size: 0.78rem; color: #666; }}
-
-    .chart-wrap {{ margin-top: 8px; }}
-    .chart-grid {{
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 24px;
-    }}
-    @media (max-width: 800px) {{ .chart-grid {{ grid-template-columns: 1fr; }} }}
-  </style>
-</head>
-<body>
-
-<header>
-  <h1>Hospital Accessibility Analysis — Germany</h1>
-  <p>Travel time from census population grid ({resolution}) to emergency hospitals by care level</p>
-</header>
-
-<nav>
-  <ul>
-    <li><a href="#summary">Summary</a></li>
-    <li><a href="#coverage">Coverage</a></li>
-    <li><a href="#distribution">Distribution</a></li>
-    <li><a href="#map">Map</a></li>
-    <li><a href="#equity">Equity</a></li>
-    <li><a href="#states">By State</a></li>
-  </ul>
-</nav>
-
-<main>
-
-  <!-- ── 1. Summary ── -->
-  <section id="summary">
-    <h2>Summary Statistics</h2>
-    <p class="section-desc">
-      Each census grid cell ({resolution} × {resolution}) is matched to all hospitals within 15 km.
-      Travel times are driving durations in seconds computed via road network routing.
-      Hospital levels: <strong>Level 1</strong> (basic emergency care),
-      <strong>Level 2</strong> (advanced), <strong>Level 3</strong> (comprehensive / trauma centre).
-    </p>
-    <div class="data-note">
-      ⚠ {data_note}
-    </div>
-    {summary_table_html}
-  </section>
-
-  <!-- ── 2. Coverage ── -->
-  <section id="coverage">
-    <h2>Population Coverage by Travel Time Threshold</h2>
-    <p class="section-desc">
-      Share of the covered population that can reach the nearest hospital of each level
-      within 15, 30, or 60 minutes of driving.
-    </p>
-    <div class="chart-wrap">{chart_coverage}</div>
-  </section>
-
-  <!-- ── 3. Distribution ── -->
-  <section id="distribution">
-    <h2>Travel Time Distributions</h2>
-    <p class="section-desc">
-      Left: cumulative distribution function (CDF) showing what fraction of the population
-      is within a given drive time. Right: population-weighted histogram in 5-minute bins.
-    </p>
-    <div class="chart-grid">
-      <div class="chart-wrap">{chart_cdf_html}</div>
-      <div class="chart-wrap">{chart_hist_html}</div>
-    </div>
-  </section>
-
-  <!-- ── 4. Map ── -->
-  <section id="map">
-    <h2>Interactive Accessibility Map</h2>
-    <p class="section-desc">
-      Each dot represents one census grid cell coloured by travel time (minutes) to the
-      nearest hospital of the selected level. Toggle layers using the controls.
-      ({total_cells:,} census cells with routing data shown.)
-    </p>
-    <div id="map-container">
-      <div id="map"></div>
-      <div id="map-controls">
-        <strong>Show travel time to:</strong>
-        <button class="map-btn active" onclick="setLayer('any')">Any hospital</button>
-        <button class="map-btn" onclick="setLayer('l1')">Level 1 hospitals</button>
-        <button class="map-btn" onclick="setLayer('l2')">Level 2 hospitals</button>
-        <button class="map-btn" onclick="setLayer('l3')">Level 3 hospitals</button>
-        <hr style="margin:8px 0;border-color:#ddd">
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-          <input type="checkbox" id="toggle-hospitals" checked onchange="toggleHospitals(this.checked)">
-          Show hospitals
-        </label>
-      </div>
-      <div id="map-legend">
-        <strong>Travel time (min)</strong>
-        <div class="legend-grad"></div>
-        <div class="legend-labels"><span>0</span><span>15</span><span>30</span><span>45</span><span>60+</span></div>
-        <br>
-        <strong>Hospitals</strong>
-        <div class="legend-row">
-          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#6b9ec7"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">1</text></svg>
-          Level 1
-        </div>
-        <div class="legend-row">
-          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#9b7dbf"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">2</text></svg>
-          Level 2
-        </div>
-        <div class="legend-row">
-          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#c4744d"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">3</text></svg>
-          Level 3
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── 5. Equity ── -->
-  <section id="equity">
-    <h2>Equity Analysis — Age Group Comparison</h2>
-    <p class="section-desc">
-      Comparing coverage rates for the overall population, adults aged 65 and over,
-      and children under 18, for access to the nearest Level 3 (comprehensive) hospital.
-    </p>
-    <div class="chart-wrap">{chart_equity_html}</div>
-  </section>
-
-  <!-- ── 6. By State ── -->
-  <section id="states">
-    <h2>Regional Breakdown by Federal State</h2>
-    <p class="section-desc">
-      Median travel time and 30-minute coverage rate to the nearest Level 3 hospital,
-      disaggregated by German <em>Bundesland</em>.
-    </p>
-    <div class="chart-wrap">{chart_states_html}</div>
-  </section>
-
-</main>
-
-<script>
-// ── MapLibre setup ──
-// GeoJSON data loaded from external files (cells.geojson, hospitals.geojson)
-
-const TRAVEL_COLOR = [
-  "interpolate", ["linear"],
-  ["coalesce", ["get", "min_any"], 999],
-    0,  "#1a9641",
-   15,  "#a6d96a",
-   30,  "#ffffbf",
-   45,  "#fdae61",
-   60,  "#d7191c",
-  999,  "#aaaaaa"
-];
-
-function makeTravelColor(prop) {{
-  return [
-    "interpolate", ["linear"],
-    ["coalesce", ["get", prop], 999],
-      0,  "#1a9641",
-     15,  "#a6d96a",
-     30,  "#ffffbf",
-     45,  "#fdae61",
-     60,  "#d7191c",
-    999,  "#aaaaaa"
-  ];
-}}
-
-const HOSPITAL_COLORS = {{"1": "#6b9ec7", "2": "#9b7dbf", "3": "#c4744d"}};
-
-const map = new maplibregl.Map({{
-  container: "map",
-  style: {{
-    version: 8,
-    sources: {{
-      "carto-base": {{
-        type: "raster",
-        tiles: ["https://a.basemaps.cartocdn.com/light_nolabels/{{z}}/{{x}}/{{y}}.png",
-                "https://b.basemaps.cartocdn.com/light_nolabels/{{z}}/{{x}}/{{y}}.png",
-                "https://c.basemaps.cartocdn.com/light_nolabels/{{z}}/{{x}}/{{y}}.png"],
-        tileSize: 256,
-        attribution: "© <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors © <a href='https://carto.com/attributions'>CARTO</a>",
-      }},
-      "carto-labels": {{
-        type: "raster",
-        tiles: ["https://a.basemaps.cartocdn.com/light_only_labels/{{z}}/{{x}}/{{y}}.png",
-                "https://b.basemaps.cartocdn.com/light_only_labels/{{z}}/{{x}}/{{y}}.png",
-                "https://c.basemaps.cartocdn.com/light_only_labels/{{z}}/{{x}}/{{y}}.png"],
-        tileSize: 256,
-      }},
-    }},
-    layers: [{{ id: "carto-base-layer", type: "raster", source: "carto-base" }}],
-  }},
-  center: [10.45, 51.2],
-  zoom: 5.5,
-}});
-
-map.addControl(new maplibregl.NavigationControl(), "top-right");
-
-// Draw a numbered circle icon onto a canvas and return ImageData for map.addImage()
-function makeHospitalIcon(label, color) {{
-  const size = 20;
-  const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  const r = size / 2;
-
-  // Colored filled circle
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(r, r, r - 1, 0, Math.PI * 2);
-  ctx.fill();
-
-  // White number centered in the circle
-  ctx.fillStyle = "#fff";
-  ctx.font = `bold ${{size * 0.55}}px Arial, sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(label, r, r + 0.5);
-
-  const img = ctx.getImageData(0, 0, size, size);
-  return {{ width: size, height: size, data: img.data }};
-}}
-
-map.on("load", () => {{
-  // Register hospital icons — numbered by level, all the same size
-  map.addImage("hospital-1", makeHospitalIcon("1", "#6b9ec7"));
-  map.addImage("hospital-2", makeHospitalIcon("2", "#9b7dbf"));
-  map.addImage("hospital-3", makeHospitalIcon("3", "#c4744d"));
-
-  // Census cells layer
-  map.addSource("cells", {{ type: "geojson", data: "cells.geojson" }});
-  map.addLayer({{
-    id: "cells-layer",
-    type: "circle",
-    source: "cells",
-    paint: {{
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 2, 9, 5],
-      "circle-color": makeTravelColor("min_any"),
-      "circle-opacity": 0.7,
-    }},
-  }});
-
-  // Hospital markers — symbol layer using canvas-drawn cross icons
-  map.addSource("hospitals", {{ type: "geojson", data: "hospitals.geojson" }});
-  map.addLayer({{
-    id: "hospitals-layer",
-    type: "symbol",
-    source: "hospitals",
-    layout: {{
-      "icon-image": [
-        "match", ["to-string", ["get", "level"]],
-        "1", "hospital-1",
-        "2", "hospital-2",
-        "hospital-3"
-      ],
-      "icon-allow-overlap": true,
-      "icon-ignore-placement": true,
-    }},
-  }});
-
-  // Labels on top of all data layers
-  map.addLayer({{ id: "carto-labels-layer", type: "raster", source: "carto-labels" }});
-
-  // Popup for census cells
-  const popup = new maplibregl.Popup({{ closeButton: false, closeOnClick: false }});
-  map.on("mouseenter", "cells-layer", (e) => {{
-    map.getCanvas().style.cursor = "pointer";
-    const p = e.features[0].properties;
-    const fmt = (v) => v == null || v >= 999 ? "n/a" : v.toFixed(1) + " min";
-    popup.setLngLat(e.lngLat).setHTML(`
-      <div style="font-size:12px;line-height:1.6">
-        <strong>Travel time</strong><br>
-        Any hospital: ${{fmt(p.min_any)}}<br>
-        Level 1: ${{fmt(p.min_l1)}}<br>
-        Level 2: ${{fmt(p.min_l2)}}<br>
-        Level 3: ${{fmt(p.min_l3)}}
-        <hr style="margin:4px 0;border-color:#ddd">
-        <strong>Population</strong><br>
-        Total: ${{p.pop}}<br>
-        Under 18: ${{p.pop_under18}}<br>
-        18–29: ${{p.pop_18to29}}<br>
-        30–49: ${{p.pop_30to49}}<br>
-        50–64: ${{p.pop_50to64}}<br>
-        65+: ${{p.pop_65plus}}
-      </div>
-    `).addTo(map);
-  }});
-  map.on("mouseleave", "cells-layer", () => {{
-    map.getCanvas().style.cursor = "";
-    popup.remove();
-  }});
-
-  // Popup for hospitals
-  map.on("click", "hospitals-layer", (e) => {{
-    const p = e.features[0].properties;
-    new maplibregl.Popup()
-      .setLngLat(e.lngLat)
-      .setHTML(`<strong>${{p.name}}</strong><br>Level ${{p.level}} hospital`)
-      .addTo(map);
-  }});
-}});
-
-let currentProp = "min_any";
-
-function setLayer(level) {{
-  const propMap = {{ any: "min_any", l1: "min_l1", l2: "min_l2", l3: "min_l3" }};
-  currentProp = propMap[level];
-  map.setPaintProperty("cells-layer", "circle-color", makeTravelColor(currentProp));
-  document.querySelectorAll(".map-btn").forEach((b, i) => {{
-    b.classList.toggle("active", ["any","l1","l2","l3"][i] === level);
-  }});
-}}
-
-function toggleHospitals(visible) {{
-  map.setLayoutProperty("hospitals-layer", "visibility", visible ? "visible" : "none");
-}}
-</script>
-
-</body>
-</html>
-"""
+    """Render the report HTML by loading the template and substituting placeholders."""
+    pkg = importlib.resources.files("ems_germany_analysis")
+    template_text = pkg.joinpath("templates/report.html").read_text(encoding="utf-8")
+    return (
+        template_text
+        .replace("<!-- INSERT_RESOLUTION -->", resolution)
+        .replace("<!-- INSERT_DATA_NOTE -->", data_note)
+        .replace("<!-- INSERT_SUMMARY_TABLE -->", summary_table_html)
+        .replace("<!-- INSERT_CHART_COVERAGE -->", chart_coverage)
+        .replace("<!-- INSERT_CHART_CDF -->", chart_cdf_html)
+        .replace("<!-- INSERT_CHART_HIST -->", chart_hist_html)
+        .replace("<!-- INSERT_CHART_EQUITY -->", chart_equity_html)
+        .replace("<!-- INSERT_CHART_STATES -->", chart_states_html)
+        .replace("<!-- INSERT_TOTAL_CELLS -->", f"{total_cells:,}")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1029,12 +599,16 @@ function toggleHospitals(visible) {{
 # ---------------------------------------------------------------------------
 
 def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, resolution: str = "1km") -> None:
-    """Generate a hospital accessibility report as a directory with index.html and GeoJSON files."""
+    """Generate a hospital accessibility report as a directory with index.html and PMTiles data."""
+    if shutil.which("tippecanoe") is None:
+        click.echo("Error: tippecanoe is not installed or not in PATH.", err=True)
+        click.echo("Install tippecanoe: https://github.com/felt/tippecanoe", err=True)
+        sys.exit(1)
+
     cache_dir = _cache_dir()
     cost_table = f"census_hospital_route_from_census_{resolution}"
     sql_summary = SQL_SUMMARY.format(cost_table=cost_table)
     sql_per_cell = SQL_PER_CELL.format(cost_table=cost_table, resolution=resolution)
-    sql_map_cells = SQL_MAP_CELLS.format(cost_table=cost_table, resolution=resolution)
     sql_states = SQL_STATES.format(cost_table=cost_table, resolution=resolution)
 
     click.echo("Connecting to database…")
@@ -1043,6 +617,9 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
     except psycopg.Error as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+    click.echo("Creating hex grid and travel time tables (this may take a while on first run)…")
+    create_hex_tables_sync(conn)
 
     with conn:
         click.echo("Fetching summary statistics…")
@@ -1062,13 +639,6 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
             use_cache,
         )
         click.echo(f"  → {len(df_cell):,} census cells with data")
-
-        click.echo("Fetching map data (census centroids)…")
-        df_map = _fetch_cached(
-            conn, sql_map_cells,
-            cache_dir / f"{cost_table}_map_cells.pkl",
-            use_cache,
-        )
 
         click.echo("Fetching hospital locations…")
         df_hospitals = _fetch_cached(
@@ -1094,12 +664,18 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
                 click.echo(f"  State query failed ({e}); skipping.", err=True)
                 df_states = pd.DataFrame()
 
-    conn.close()
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    data_note = (
-        "Routing calculation is still in progress. Statistics reflect only the routes computed "
-        "so far and will change as more data is added."
-    )
+    click.echo("Generating PMTiles…")
+    with psycopg.connect(dsn) as conn2:
+        generate_pmtiles(conn2, out_dir)
+
+    click.echo("Building hospitals GeoJSON…")
+    hospitals_geojson = build_hospitals_geojson(df_hospitals)
+    hospitals_path = out_dir / "hospitals.geojson"
+    hospitals_path.write_text(json.dumps(hospitals_geojson), encoding="utf-8")
+    click.echo(f"  → {len(hospitals_geojson['features']):,} hospital features")
 
     click.echo("Building charts…")
     c_coverage = chart_coverage_bars(df_cell)
@@ -1109,37 +685,33 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
     c_states   = chart_states(df_states)
     summary_tbl = render_summary_table(df_summary)
 
-    click.echo("Building map GeoJSON…")
-    cells_geojson     = build_map_geojson(df_map)
-    hospitals_geojson = build_hospitals_geojson(df_hospitals)
-    click.echo(f"  → {len(cells_geojson['features']):,} cell features, "
-               f"{len(hospitals_geojson['features']):,} hospital features")
+    data_note = (
+        "Routing calculation is still in progress. Statistics reflect only the routes computed "
+        "so far and will change as more data is added."
+    )
 
     click.echo("Assembling HTML report…")
-    html = render_html(
+    html = render_report(
         summary_table_html=summary_tbl,
         chart_coverage=c_coverage,
         chart_cdf_html=c_cdf,
         chart_hist_html=c_hist,
         chart_equity_html=c_equity,
         chart_states_html=c_states,
-        total_cells=len(df_map),
+        total_cells=len(df_cell),
         data_note=data_note,
         resolution=resolution,
     )
 
-    out_dir = Path(output)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    cells_path     = out_dir / "cells.geojson"
-    hospitals_path = out_dir / "hospitals.geojson"
-    index_path     = out_dir / "index.html"
-
-    cells_path.write_text(json.dumps(cells_geojson), encoding="utf-8")
-    hospitals_path.write_text(json.dumps(hospitals_geojson), encoding="utf-8")
+    index_path = out_dir / "index.html"
     index_path.write_text(html, encoding="utf-8")
 
-    click.echo(f"  → cells.geojson     ({cells_path.stat().st_size / 1024:.0f} KB)")
+    # Copy map.js from package templates to output directory
+    pkg = importlib.resources.files("ems_germany_analysis")
+    map_js_text = pkg.joinpath("templates/map.js").read_text(encoding="utf-8")
+    (out_dir / "map.js").write_text(map_js_text, encoding="utf-8")
+
     click.echo(f"  → hospitals.geojson ({hospitals_path.stat().st_size / 1024:.0f} KB)")
     click.echo(f"  → index.html        ({index_path.stat().st_size / 1024:.0f} KB)")
+    click.echo(f"  → map.js            ({(out_dir / 'map.js').stat().st_size / 1024:.0f} KB)")
     click.echo(f"Report written to: {out_dir}/")
