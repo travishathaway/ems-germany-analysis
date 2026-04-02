@@ -16,9 +16,7 @@ from pathlib import Path
 import click
 import pandas as pd
 import platformdirs
-import plotly.graph_objects as go
 import psycopg
-from plotly.subplots import make_subplots
 
 from .constants import APP_NAME
 from .db import create_hex_tables_sync
@@ -228,50 +226,36 @@ LEVEL_COLORS = {1: "#4dac26", 2: "#f1b614", 3: "#d7191c"}
 LEVEL_NAMES  = {1: "Level 1 (Basic)", 2: "Level 2 (Advanced)", 3: "Level 3 (Comprehensive)"}
 
 
-def chart_coverage_bars(df_cell: pd.DataFrame) -> str:
-    """Stacked/grouped bar: % population within 15 / 30 / 60 min by hospital level."""
+def chart_coverage_bars(df_cell: pd.DataFrame) -> dict:
+    """Grouped bar: % population within 15 / 30 / 60 min by hospital level."""
     thresholds = [(15, 900), (30, 1800), (60, 3600)]
     level_cols = {1: "min_secs_l1", 2: "min_secs_l2", 3: "min_secs_l3"}
+    threshold_colors = {"≤ 15 min": "#2c7bb6", "≤ 30 min": "#74add1", "≤ 60 min": "#abd9e9"}
 
-    rows = []
+    by_threshold: dict[str, dict] = {f"≤ {label} min": {"x": [], "y": []} for label, _ in thresholds}
     for level, col in level_cols.items():
         sub = df_cell.dropna(subset=[col])
         total_pop = sub["population"].sum()
         if total_pop == 0:
             continue
         for label, secs in thresholds:
-            pct = 100 * sub.loc[sub[col] <= secs, "population"].sum() / total_pop
-            rows.append({"level": LEVEL_NAMES[level], "threshold": f"≤ {label} min", "pct": pct})
+            key = f"≤ {label} min"
+            pct = round(100 * sub.loc[sub[col] <= secs, "population"].sum() / total_pop, 1)
+            by_threshold[key]["x"].append(LEVEL_NAMES[level])
+            by_threshold[key]["y"].append(pct)
 
-    df = pd.DataFrame(rows)
-    fig = go.Figure()
-    threshold_colors = {"≤ 15 min": "#2c7bb6", "≤ 30 min": "#74add1", "≤ 60 min": "#abd9e9"}
-    for thr, color in threshold_colors.items():
-        sub = df[df["threshold"] == thr]
-        fig.add_trace(go.Bar(
-            name=thr, x=sub["level"], y=sub["pct"].round(1),
-            marker_color=color,
-            text=sub["pct"].round(1).astype(str) + "%",
-            textposition="outside",
-        ))
-
-    fig.update_layout(
-        title="Population Coverage by Hospital Level and Travel Time Threshold",
-        xaxis_title="Hospital Level",
-        yaxis_title="Population covered (%)",
-        yaxis_range=[0, 110],
-        barmode="group",
-        legend_title="Travel time",
-        template="plotly_white",
-        font=dict(family="Arial, sans-serif"),
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return {
+        "traces": [
+            {"name": name, "color": threshold_colors[name], "x": vals["x"], "y": vals["y"]}
+            for name, vals in by_threshold.items()
+        ]
+    }
 
 
-def chart_cdf(df_cell: pd.DataFrame) -> str:
+def chart_cdf(df_cell: pd.DataFrame) -> dict:
     """CDF: cumulative % of population vs. travel time (minutes)."""
     level_cols = {1: "min_secs_l1", 2: "min_secs_l2", 3: "min_secs_l3"}
-    fig = go.Figure()
+    series = []
 
     for level, col in level_cols.items():
         sub = df_cell.dropna(subset=[col]).copy()
@@ -285,142 +269,88 @@ def chart_cdf(df_cell: pd.DataFrame) -> str:
         if len(sub) > 5000:
             sub = sub.iloc[:: max(1, len(sub) // 5000)]
 
-        fig.add_trace(go.Scatter(
-            x=sub["min_min"], y=sub["cum_pct"],
-            mode="lines",
-            name=LEVEL_NAMES[level],
-            line=dict(color=LEVEL_COLORS[level], width=2),
-        ))
+        series.append({
+            "name":  LEVEL_NAMES[level],
+            "color": LEVEL_COLORS[level],
+            "x": [round(v, 2) for v in sub["min_min"].tolist()],
+            "y": [round(v, 2) for v in sub["cum_pct"].tolist()],
+        })
 
-    fig.add_vline(x=15, line_dash="dash", line_color="gray", annotation_text="15 min")
-    fig.add_vline(x=30, line_dash="dash", line_color="gray", annotation_text="30 min")
-
-    fig.update_layout(
-        title="Cumulative Population Accessibility (CDF)",
-        xaxis_title="Travel time to nearest hospital (minutes)",
-        yaxis_title="Cumulative population (%)",
-        xaxis_range=[0, 90],
-        legend_title="Hospital level",
-        template="plotly_white",
-        font=dict(family="Arial, sans-serif"),
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return {"series": series}
 
 
-def chart_travel_histogram(df_cell: pd.DataFrame) -> str:
+def chart_travel_histogram(df_cell: pd.DataFrame) -> dict:
     """Population-weighted histogram of travel times by hospital level."""
     level_cols = {1: "min_secs_l1", 2: "min_secs_l2", 3: "min_secs_l3"}
     bins = list(range(0, 91, 5))  # 5-minute bins up to 90 min
-    fig = go.Figure()
+    series = []
 
     for level, col in level_cols.items():
         sub = df_cell.dropna(subset=[col]).copy()
         sub["min_min"] = sub[col] / 60
-
         sub["bin"] = pd.cut(sub["min_min"], bins=bins, right=False)
         pop_per_bin = sub.groupby("bin", observed=False)["population"].sum()
         total = pop_per_bin.sum()
 
-        fig.add_trace(go.Bar(
-            x=[str(b) for b in pop_per_bin.index],
-            y=(100 * pop_per_bin / total).round(2),
-            name=LEVEL_NAMES[level],
-            marker_color=LEVEL_COLORS[level],
-            opacity=0.7,
-        ))
+        series.append({
+            "name":  LEVEL_NAMES[level],
+            "color": LEVEL_COLORS[level],
+            "x": [str(b) for b in pop_per_bin.index],
+            "y": (100 * pop_per_bin / total).round(2).tolist(),
+        })
 
-    fig.update_layout(
-        title="Distribution of Travel Times (Population-Weighted)",
-        xaxis_title="Travel time bin (minutes)",
-        yaxis_title="Share of population (%)",
-        barmode="group",
-        legend_title="Hospital level",
-        template="plotly_white",
-        font=dict(family="Arial, sans-serif"),
-        xaxis_tickangle=-45,
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return {"series": series}
 
 
-def chart_equity(df_cell: pd.DataFrame) -> str:
+def chart_equity(df_cell: pd.DataFrame) -> dict:
     """Compare accessibility for elderly (65+) vs. general population."""
     level_col = "min_secs_l3"  # Focus on Level 3 (highest care)
     thresholds = [15, 30, 60]
+    group_colors = {"All ages": "#2c7bb6", "Age 65+": "#d7191c", "Under 18": "#4dac26"}
 
     sub = df_cell.dropna(subset=[level_col]).copy()
     sub["min_min_l3"] = sub[level_col] / 60
 
-    rows = []
+    total_pop = sub["population"].sum()
+    total_65p = sub["pop_65plus"].sum()
+    total_u18 = sub["pop_under18"].sum()
+
+    groups_data: dict[str, list] = {"All ages": [], "Age 65+": [], "Under 18": []}
+    x_labels = []
     for thr in thresholds:
-        total_pop   = sub["population"].sum()
-        total_65p   = sub["pop_65plus"].sum()
-        total_u18   = sub["pop_under18"].sum()
-
         within = sub[sub["min_min_l3"] <= thr]
-        rows.append({
-            "threshold": f"≤ {thr} min",
-            "All ages":  100 * within["population"].sum()  / total_pop  if total_pop  else 0,
-            "Age 65+":   100 * within["pop_65plus"].sum()  / total_65p  if total_65p  else 0,
-            "Under 18":  100 * within["pop_under18"].sum() / total_u18  if total_u18  else 0,
-        })
+        x_labels.append(f"≤ {thr} min")
+        groups_data["All ages"].append(round(100 * within["population"].sum() / total_pop, 1) if total_pop else 0)
+        groups_data["Age 65+"].append(round(100 * within["pop_65plus"].sum()  / total_65p,  1) if total_65p  else 0)
+        groups_data["Under 18"].append(round(100 * within["pop_under18"].sum() / total_u18,  1) if total_u18  else 0)
 
-    df = pd.DataFrame(rows)
-    fig = go.Figure()
-    group_colors = {"All ages": "#2c7bb6", "Age 65+": "#d7191c", "Under 18": "#4dac26"}
-
-    for group, color in group_colors.items():
-        fig.add_trace(go.Bar(
-            name=group, x=df["threshold"], y=df[group].round(1),
-            marker_color=color,
-            text=df[group].round(1).astype(str) + "%",
-            textposition="outside",
-        ))
-
-    fig.update_layout(
-        title="Equity Analysis: Access to Level 3 Hospitals by Age Group",
-        xaxis_title="Travel time threshold",
-        yaxis_title="Population covered (%)",
-        yaxis_range=[0, 110],
-        barmode="group",
-        legend_title="Age group",
-        template="plotly_white",
-        font=dict(family="Arial, sans-serif"),
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return {
+        "groups": [
+            {"name": name, "color": group_colors[name], "x": x_labels, "y": vals}
+            for name, vals in groups_data.items()
+        ]
+    }
 
 
-def chart_states(df_states: pd.DataFrame) -> str:
-    """Heatmap: median travel time to Level 3 hospital by federal state."""
+def chart_states(df_states: pd.DataFrame) -> dict | None:
+    """Median travel time and 30-min coverage by federal state for Level 3 hospitals."""
     df3 = df_states[df_states["hospital_level"] == 3].copy()
     if df3.empty:
-        return "<p><em>State-level data not available.</em></p>"
+        return None
 
-    df3 = df3.sort_values("median_travel_min")
-    fig = make_subplots(rows=1, cols=2, subplot_titles=(
-        "Median Travel Time to Nearest Level 3 Hospital (min)",
-        "% Population within 30 min of Level 3 Hospital",
-    ))
+    df3_median = df3.sort_values("median_travel_min")
+    df3_pct30  = df3.sort_values("pct_within_30min")
 
-    fig.add_trace(go.Bar(
-        x=df3["median_travel_min"], y=df3["state"],
-        orientation="h", name="Median (min)",
-        marker_color="#d7191c",
-    ), row=1, col=1)
-
-    df3_sorted30 = df3.sort_values("pct_within_30min")
-    fig.add_trace(go.Bar(
-        x=df3_sorted30["pct_within_30min"], y=df3_sorted30["state"],
-        orientation="h", name="% within 30 min",
-        marker_color="#2c7bb6",
-    ), row=1, col=2)
-
-    fig.update_layout(
-        height=550,
-        showlegend=False,
-        template="plotly_white",
-        font=dict(family="Arial, sans-serif"),
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return {
+        "median": [
+            {"state": row["state"], "value": float(row["median_travel_min"])}
+            for _, row in df3_median.iterrows()
+        ],
+        "pct30": [
+            {"state": row["state"], "value": float(row["pct_within_30min"])}
+            for _, row in df3_pct30.iterrows()
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -566,13 +496,20 @@ def build_hospitals_geojson(df_hospitals: pd.DataFrame) -> dict:
 # HTML assembly
 # ---------------------------------------------------------------------------
 
+def _chart_element(tag: str, src: str | None) -> str:
+    """Render a chart custom element with a src URL, or an empty element if no data."""
+    if src is None:
+        return f"<{tag}></{tag}>"
+    return f'<{tag} src="{src}"></{tag}>'
+
+
 def render_report(
     summary_table_html: str,
-    chart_coverage: str,
-    chart_cdf_html: str,
-    chart_hist_html: str,
-    chart_equity_html: str,
-    chart_states_html: str,
+    chart_coverage_src: str,
+    chart_cdf_src: str,
+    chart_hist_src: str,
+    chart_equity_src: str,
+    chart_states_src: str | None,
     total_cells: int,
     data_note: str,
     resolution: str = "1km",
@@ -585,11 +522,11 @@ def render_report(
         .replace("<!-- INSERT_RESOLUTION -->", resolution)
         .replace("<!-- INSERT_DATA_NOTE -->", data_note)
         .replace("<!-- INSERT_SUMMARY_TABLE -->", summary_table_html)
-        .replace("<!-- INSERT_CHART_COVERAGE -->", chart_coverage)
-        .replace("<!-- INSERT_CHART_CDF -->", chart_cdf_html)
-        .replace("<!-- INSERT_CHART_HIST -->", chart_hist_html)
-        .replace("<!-- INSERT_CHART_EQUITY -->", chart_equity_html)
-        .replace("<!-- INSERT_CHART_STATES -->", chart_states_html)
+        .replace("<!-- INSERT_CHART_COVERAGE -->", _chart_element("chart-coverage", chart_coverage_src))
+        .replace("<!-- INSERT_CHART_CDF -->",      _chart_element("chart-cdf",      chart_cdf_src))
+        .replace("<!-- INSERT_CHART_HIST -->",     _chart_element("chart-histogram", chart_hist_src))
+        .replace("<!-- INSERT_CHART_EQUITY -->",   _chart_element("chart-equity",   chart_equity_src))
+        .replace("<!-- INSERT_CHART_STATES -->",   _chart_element("chart-states",   chart_states_src))
         .replace("<!-- INSERT_TOTAL_CELLS -->", f"{total_cells:,}")
     )
 
@@ -678,11 +615,16 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
     click.echo(f"  → {len(hospitals_geojson['features']):,} hospital features")
 
     click.echo("Building charts…")
-    c_coverage = chart_coverage_bars(df_cell)
-    c_cdf      = chart_cdf(df_cell)
-    c_hist     = chart_travel_histogram(df_cell)
-    c_equity   = chart_equity(df_cell)
-    c_states   = chart_states(df_states)
+    chart_data = {
+        "chart-coverage.json": chart_coverage_bars(df_cell),
+        "chart-cdf.json":      chart_cdf(df_cell),
+        "chart-hist.json":     chart_travel_histogram(df_cell),
+        "chart-equity.json":   chart_equity(df_cell),
+        "chart-states.json":   chart_states(df_states),
+    }
+    for filename, data in chart_data.items():
+        if data is not None:
+            (out_dir / filename).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     summary_tbl = render_summary_table(df_summary)
 
     data_note = (
@@ -693,11 +635,11 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
     click.echo("Assembling HTML report…")
     html = render_report(
         summary_table_html=summary_tbl,
-        chart_coverage=c_coverage,
-        chart_cdf_html=c_cdf,
-        chart_hist_html=c_hist,
-        chart_equity_html=c_equity,
-        chart_states_html=c_states,
+        chart_coverage_src="chart-coverage.json",
+        chart_cdf_src="chart-cdf.json",
+        chart_hist_src="chart-hist.json",
+        chart_equity_src="chart-equity.json",
+        chart_states_src="chart-states.json" if chart_data["chart-states.json"] is not None else None,
         total_cells=len(df_cell),
         data_note=data_note,
         resolution=resolution,
@@ -706,12 +648,26 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
     index_path = out_dir / "index.html"
     index_path.write_text(html, encoding="utf-8")
 
-    # Copy map.js from package templates to output directory
+    # Copy web component JS files from package templates to output directory
     pkg = importlib.resources.files("ems_germany_analysis")
-    map_js_text = pkg.joinpath("templates/map.js").read_text(encoding="utf-8")
-    (out_dir / "map.js").write_text(map_js_text, encoding="utf-8")
+    component_files = [
+        "chart-coverage.js",
+        "chart-cdf.js",
+        "chart-histogram.js",
+        "chart-equity.js",
+        "chart-states.js",
+        "accessibility-map.js",
+    ]
+    for js_file in component_files:
+        text = pkg.joinpath(f"templates/{js_file}").read_text(encoding="utf-8")
+        (out_dir / js_file).write_text(text, encoding="utf-8")
 
     click.echo(f"  → hospitals.geojson ({hospitals_path.stat().st_size / 1024:.0f} KB)")
     click.echo(f"  → index.html        ({index_path.stat().st_size / 1024:.0f} KB)")
-    click.echo(f"  → map.js            ({(out_dir / 'map.js').stat().st_size / 1024:.0f} KB)")
+    for js_file in component_files:
+        click.echo(f"  → {js_file:<30} ({(out_dir / js_file).stat().st_size / 1024:.0f} KB)")
+    for filename in chart_data:
+        p = out_dir / filename
+        if p.exists():
+            click.echo(f"  → {filename:<30} ({p.stat().st_size / 1024:.0f} KB)")
     click.echo(f"Report written to: {out_dir}/")

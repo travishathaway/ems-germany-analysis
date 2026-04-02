@@ -4,10 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Hospital Accessibility in Germany</title>
-  <script src="https://cdn.plot.ly/plotly-3.0.1.min.js"></script>
-  <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
-  <link href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet" />
-  <script src="https://unpkg.com/pmtiles@3.2.0/dist/pmtiles.js"></script>
+  <script src="chart-coverage.js"></script>
+  <script src="chart-cdf.js"></script>
+  <script src="chart-histogram.js"></script>
+  <script src="chart-equity.js"></script>
+  <script src="chart-states.js"></script>
+  <script src="accessibility-map.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -105,101 +107,6 @@
     .level-2 { background: #f1b614; color: #333; }
     .level-3 { background: #d7191c; }
 
-    /* Map */
-    #map-container {
-      position: relative;
-      height: 560px;
-      border-radius: 6px;
-      overflow: hidden;
-    }
-    #map { width: 100%; height: 100%; }
-    #map-controls {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      background: rgba(255,255,255,0.95);
-      padding: 12px 16px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      z-index: 10;
-      font-size: 0.85rem;
-    }
-    #map-controls strong { display: block; margin-bottom: 8px; color: #1a3a5c; }
-    .map-btn {
-      display: block;
-      width: 100%;
-      margin-bottom: 5px;
-      padding: 5px 10px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
-      background: #f5f5f5;
-      cursor: pointer;
-      font-size: 0.82rem;
-      text-align: left;
-      transition: background 0.15s;
-    }
-    .map-btn.active { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
-    .map-btn:hover:not(.active) { background: #e8eef5; }
-    #map-legend {
-      position: absolute;
-      bottom: 30px;
-      right: 12px;
-      background: rgba(255,255,255,0.95);
-      padding: 10px 14px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-      z-index: 10;
-      font-size: 0.82rem;
-    }
-    #map-legend strong { display: block; margin-bottom: 6px; color: #1a3a5c; }
-    .legend-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-    .legend-dot {
-      width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
-    }
-    .legend-grad {
-      width: 130px; height: 12px; border-radius: 3px;
-      background: linear-gradient(to right, #1a9641, #a6d96a, #ffffbf, #fdae61, #d7191c);
-    }
-    .legend-labels { display: flex; justify-content: space-between; font-size: 0.78rem; color: #666; }
-
-    /* Side panel */
-    #hex-info-panel {
-      position: absolute;
-      right: 0;
-      top: 0;
-      bottom: 0;
-      width: 260px;
-      background: rgba(255,255,255,0.97);
-      padding: 16px;
-      overflow-y: auto;
-      box-shadow: -2px 0 8px rgba(0,0,0,0.15);
-      z-index: 10;
-      font-size: 0.83rem;
-      pointer-events: none;
-    }
-    #hex-info-panel h4 {
-      color: #1a3a5c;
-      font-size: 0.95rem;
-      margin-bottom: 12px;
-      padding-bottom: 8px;
-      border-bottom: 1px solid #eee;
-    }
-    .panel-section-title {
-      font-weight: 600;
-      color: #1a3a5c;
-      margin: 10px 0 4px;
-      font-size: 0.82rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .panel-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.82rem;
-    }
-    .panel-table td { padding: 3px 0; }
-    .panel-table td:last-child { text-align: right; font-weight: 500; }
-
     .chart-wrap { margin-top: 8px; }
     .chart-grid {
       display: grid;
@@ -276,46 +183,11 @@
       Hover over a hexagon to see travel time and population details.
       (<!-- INSERT_TOTAL_CELLS --> census cells with routing data.)
     </p>
-    <div id="map-container">
-      <div id="map"></div>
-      <div id="map-controls">
-        <strong>Show travel time to:</strong>
-        <button class="map-btn active" onclick="setLayer('any')">Any hospital</button>
-        <button class="map-btn" onclick="setLayer('l1')">Level 1 hospitals</button>
-        <button class="map-btn" onclick="setLayer('l2')">Level 2 hospitals</button>
-        <button class="map-btn" onclick="setLayer('l3')">Level 3 hospitals</button>
-        <hr style="margin:8px 0;border-color:#ddd">
-        <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-          <input type="checkbox" id="toggle-hospitals" checked onchange="toggleHospitals(this.checked)">
-          Show hospitals
-        </label>
-      </div>
-      <div id="map-legend">
-        <strong>Travel time (min)</strong>
-        <div class="legend-row">
-          <div class="legend-grad"></div>
-        </div>
-        <div class="legend-labels"><span>0</span><span>15</span><span>30</span><span>45</span><span>60+</span></div>
-        <br>
-        <strong>Hospitals</strong>
-        <div class="legend-row">
-          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#6b9ec7"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">1</text></svg>
-          Level 1
-        </div>
-        <div class="legend-row">
-          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#9b7dbf"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">2</text></svg>
-          Level 2
-        </div>
-        <div class="legend-row">
-          <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#c4744d"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">3</text></svg>
-          Level 3
-        </div>
-      </div>
-      <div id="hex-info-panel" style="display:none;">
-        <h4>Hexagon Details</h4>
-        <div id="hex-info-content"></div>
-      </div>
-    </div>
+    <accessibility-map
+      pmtiles-dir="pmtiles"
+      hospitals-src="hospitals.geojson"
+      style="height:560px;border-radius:6px;overflow:hidden;">
+    </accessibility-map>
   </section>
 
   <!-- ── 5. Equity ── -->
@@ -340,6 +212,5 @@
 
 </main>
 
-<script src="map.js"></script>
 </body>
 </html>

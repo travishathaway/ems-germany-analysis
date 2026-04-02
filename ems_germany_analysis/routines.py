@@ -410,14 +410,12 @@ async def ors_routing_analyze_from_census_point(
                 total=total,
             )
 
-            offset = 0
-            while offset < total:
+            while True:
                 async with pool.connection() as conn:
                     async with conn.cursor() as cur:
-                        page_sql = psycopg.sql.SQL("{} LIMIT {} OFFSET {}").format(
+                        page_sql = psycopg.sql.SQL("{} LIMIT {}").format(
                             _build_base_sql(),
                             psycopg.sql.Literal(page_size),
-                            psycopg.sql.Literal(offset),
                         )
                         await cur.execute(page_sql)
                         rows = await cur.fetchall()
@@ -426,7 +424,6 @@ async def ors_routing_analyze_from_census_point(
                     break
 
                 await _process_multiple_ors_from_census(pool, rows, ors_url, cost_table, progress, task_id)
-                offset += page_size
 
     finally:
         await pool.close()
