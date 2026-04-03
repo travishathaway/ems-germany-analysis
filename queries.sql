@@ -1,4 +1,4 @@
-DeDe-- Step one: created a buffered version of Germany
+-- Step one: created a buffered version of Germany
 
 CREATE TABLE ems_germany_analysis.germany_buffered AS 
 select name, st_buffer(geom, 1000) as geom from osm_germany.place_polygon_nested where name = 'Germany';

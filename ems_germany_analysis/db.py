@@ -45,7 +45,7 @@ async def get_db_pool(dsn: str) -> AsyncConnectionPool:
         pool = AsyncConnectionPool(
             conninfo=dsn,
             min_size=2,
-            max_size=10,
+            max_size=30,  # must exceed the largest semaphore (25) plus cursor connection overhead
             open=False,
         )
         await pool.open()

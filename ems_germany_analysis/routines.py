@@ -24,6 +24,25 @@ from .errors import EmsGermanyError
 
 logger = logging.getLogger(APP_NAME)
 
+# Composed once per cost_table value; reused across every row insert.
+_INSERT_ROUTE_SQL_TEMPLATE = psycopg.sql.SQL("""
+    INSERT INTO {schema}.{table}
+        (gitter_id, hospital_id, total_cost_seconds, geom, distance)
+    VALUES (%s, %s, %s, ST_Transform(ST_GeomFromGeoJSON(%s), 3035), %s)
+    ON CONFLICT (gitter_id, hospital_id) DO UPDATE SET
+        total_cost_seconds = EXCLUDED.total_cost_seconds,
+        geom = EXCLUDED.geom
+""")
+
+# Inserted when ORS cannot calculate a route. DO NOTHING on conflict ensures a
+# previously successful result is never overwritten by a sentinel.
+_INSERT_SENTINEL_SQL_TEMPLATE = psycopg.sql.SQL("""
+    INSERT INTO {schema}.{table}
+        (gitter_id, hospital_id, total_cost_seconds, geom, distance)
+    VALUES (%s, %s, NULL, NULL, NULL)
+    ON CONFLICT (gitter_id, hospital_id) DO NOTHING
+""")
+
 
 async def pgrouting_analyze(hospital_id, dsn, skip_network):
     pool = await get_db_pool(dsn)
@@ -384,9 +403,10 @@ async def ors_routing_analyze_from_census_point(
                 UNION ALL
                 (SELECT id, geom FROM {schema}.{hospital_table} WHERE notfall = '3.0' ORDER BY p.geom <-> geom LIMIT 2)
             ) h
-            LEFT JOIN {schema}.{cost_table} r ON p.{gitter_id} = r.gitter_id AND h.id = r.hospital_id
-            WHERE r.gitter_id IS NULL
-            ORDER BY p.{gitter_id}, h.id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM {schema}.{cost_table} r
+                WHERE r.gitter_id = p.{gitter_id}
+            )
         """).format(
             gitter_id=psycopg.sql.Identifier(f"gitter_id_{resolution}"),
             census_table=psycopg.sql.Identifier(f"alter_in_5_altersklassen_{resolution}"),
@@ -395,12 +415,36 @@ async def ors_routing_analyze_from_census_point(
             cost_table=psycopg.sql.Identifier(cost_table),
         )
 
+    # Pre-compose once; passed through to every row insert instead of rebuilding per row.
+    insert_sql = _INSERT_ROUTE_SQL_TEMPLATE.format(
+        schema=psycopg.sql.Identifier("ems_germany_analysis"),
+        table=psycopg.sql.Identifier(cost_table),
+    )
+    sentinel_sql = _INSERT_SENTINEL_SQL_TEMPLATE.format(
+        schema=psycopg.sql.Identifier("ems_germany_analysis"),
+        table=psycopg.sql.Identifier(cost_table),
+    )
+
     try:
         async with pool.connection() as conn:
             await create_tables_from_census(conn, resolution, schema="ems_germany_analysis")
 
             async with conn.cursor() as cur:
-                count_sql = psycopg.sql.SQL("SELECT COUNT(*) FROM ({}) sub").format(_build_base_sql())
+                # Cheaper count: 2 routes to 3 hospitals per census point not yet in the cost table,
+                # avoiding the expensive CROSS JOIN LATERAL used by _build_base_sql().
+                count_sql = psycopg.sql.SQL("""
+                    SELECT COUNT(*) * 2 * 3
+                    FROM zensus.{census_table} p
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM {schema}.{cost_table} r
+                        WHERE r.gitter_id = p.{gitter_id}
+                    )
+                """).format(
+                    census_table=psycopg.sql.Identifier(f"alter_in_5_altersklassen_{resolution}"),
+                    schema=psycopg.sql.Identifier("ems_germany_analysis"),
+                    cost_table=psycopg.sql.Identifier(cost_table),
+                    gitter_id=psycopg.sql.Identifier(f"gitter_id_{resolution}"),
+                )
                 await cur.execute(count_sql)
                 (total,) = await cur.fetchone()
 
@@ -410,20 +454,21 @@ async def ors_routing_analyze_from_census_point(
                 total=total,
             )
 
-            while True:
+            # Single client for the entire run — reuses HTTP connections across all pages.
+            async with httpx.AsyncClient() as client:
+                # Use a server-side cursor so the query executes once and results are
+                # streamed in pages, avoiding the O(n²) cost of re-running the full
+                # query (with its expensive LATERAL join) on every iteration.
                 async with pool.connection() as conn:
-                    async with conn.cursor() as cur:
-                        page_sql = psycopg.sql.SQL("{} LIMIT {}").format(
-                            _build_base_sql(),
-                            psycopg.sql.Literal(page_size),
-                        )
-                        await cur.execute(page_sql)
-                        rows = await cur.fetchall()
-
-                if not rows:
-                    break
-
-                await _process_multiple_ors_from_census(pool, rows, ors_url, cost_table, progress, task_id)
+                    async with conn.cursor(name="census_pairs_cursor") as cur:
+                        await cur.execute(_build_base_sql())
+                        while True:
+                            rows = await cur.fetchmany(page_size)
+                            if not rows:
+                                break
+                            await _process_multiple_ors_from_census(
+                                pool, client, rows, ors_url, insert_sql, sentinel_sql, progress, task_id
+                            )
 
     finally:
         await pool.close()
@@ -431,33 +476,34 @@ async def ors_routing_analyze_from_census_point(
 
 async def _process_multiple_ors_from_census(
     pool: psycopg_pool.AsyncConnectionPool,
+    client: httpx.AsyncClient,
     rows: list,
     ors_url: str,
-    cost_table: str,
+    insert_sql: psycopg.sql.Composed,
+    sentinel_sql: psycopg.sql.Composed,
     progress: Progress,
     task_id: int,
 ) -> None:
     """Process census→hospital pairs through ORS and persist results."""
     semaphore = Semaphore(25)
 
-    async with httpx.AsyncClient() as client:
-        tasks = [
-            create_task(_ors_calculate_and_save_from_census(
-                pool, client, semaphore, progress, task_id,
-                gitter_id, hospital_id,
-                census_lat, census_lon,
-                hospital_lat, hospital_lon,
-                ors_url, cost_table
-            ))
-            for gitter_id, census_lat, census_lon, hospital_id, hospital_lat, hospital_lon in rows
-        ]
-        try:
-            await asyncio.gather(*tasks)
-        except CancelledError:
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            logger.error("Cancelled all tasks.")
+    tasks = [
+        create_task(_ors_calculate_and_save_from_census(
+            pool, client, semaphore, progress, task_id,
+            gitter_id, hospital_id,
+            census_lat, census_lon,
+            hospital_lat, hospital_lon,
+            ors_url, insert_sql, sentinel_sql
+        ))
+        for gitter_id, census_lat, census_lon, hospital_id, hospital_lat, hospital_lon in rows
+    ]
+    try:
+        await asyncio.gather(*tasks)
+    except CancelledError:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        logger.error("Cancelled all tasks.")
 
 
 async def _ors_calculate_and_save_from_census(
@@ -473,7 +519,8 @@ async def _ors_calculate_and_save_from_census(
     hospital_lat: float,
     hospital_lon: float,
     ors_url: str,
-    cost_table: str,
+    insert_sql: psycopg.sql.Composed,
+    sentinel_sql: psycopg.sql.Composed,
 ) -> None:
     """Call ORS directions API (census→hospital) and persist the result."""
     async with semaphore:
@@ -489,6 +536,8 @@ async def _ors_calculate_and_save_from_census(
                     "ORS request failed for gitter_id=%s hospital_id=%s: HTTP %s - %s",
                     gitter_id, hospital_id, response.status_code, response.text
                 )
+                async with pool.connection() as conn, conn.cursor() as cur:
+                    await cur.execute(sentinel_sql, (gitter_id, hospital_id))
                 return
 
             data = response.json()
@@ -497,18 +546,7 @@ async def _ors_calculate_and_save_from_census(
             geometry_json = json.dumps(feature["geometry"])
 
             async with pool.connection() as conn, conn.cursor() as cur:
-                prepared_sql = psycopg.sql.SQL("""
-                    INSERT INTO {schema}.{table}
-                        (gitter_id, hospital_id, total_cost_seconds, geom, distance)
-                    VALUES (%s, %s, %s, ST_Transform(ST_GeomFromGeoJSON(%s), 3035), %s)
-                    ON CONFLICT (gitter_id, hospital_id) DO UPDATE SET
-                        total_cost_seconds = EXCLUDED.total_cost_seconds,
-                        geom = EXCLUDED.geom
-                """).format(
-                    schema=psycopg.sql.Identifier("ems_germany_analysis"),
-                    table=psycopg.sql.Identifier(cost_table),
-                )
-                await cur.execute(prepared_sql, (
+                await cur.execute(insert_sql, (
                     gitter_id, hospital_id, total_cost_seconds, geometry_json, None
                 ))
         except CancelledError:
@@ -518,5 +556,123 @@ async def _ors_calculate_and_save_from_census(
                 "Error processing ORS route for gitter_id=%s hospital_id=%s",
                 gitter_id, hospital_id
             )
+            try:
+                async with pool.connection() as conn, conn.cursor() as cur:
+                    await cur.execute(sentinel_sql, (gitter_id, hospital_id))
+            except Exception:
+                logger.exception(
+                    "Failed to insert sentinel for gitter_id=%s hospital_id=%s",
+                    gitter_id, hospital_id
+                )
         finally:
             progress.advance(task_id)
+
+
+async def ors_routing_cleanup(
+    dsn: str,
+    ors_url: str,
+    hospital_table: str,
+    resolution: ResolutionSuffix,
+    page_size: int = 100_000,
+) -> None:
+    """Re-route census-hospital pairs missing from a prior run.
+
+    Census points that are fully absent from the cost table are left to the main
+    ors_analyze run. This only processes points that have *some* entries but
+    fewer than 6, i.e. partial failures. Pairs that ORS cannot route are
+    recorded as NULL sentinels so they are never retried again.
+    """
+    pool = await get_db_pool(dsn)
+
+    match resolution:
+        case ResolutionSuffix.m100:
+            cost_table = CENSUS_HOSPITAL_ROUTE_TABLE_FROM_CENSUS_100M
+        case ResolutionSuffix.km1:
+            cost_table = CENSUS_HOSPITAL_ROUTE_TABLE_FROM_CENSUS_1KM
+        case ResolutionSuffix.km10:
+            cost_table = CENSUS_HOSPITAL_ROUTE_TABLE_FROM_CENSUS_10KM
+
+    def _build_cleanup_sql() -> psycopg.sql.Composed:
+        return psycopg.sql.SQL("""
+            SELECT
+                p.{gitter_id},
+                ST_Y(ST_Transform(p.geom, 4326)) AS census_lat,
+                ST_X(ST_Transform(p.geom, 4326)) AS census_lon,
+                h.id    AS hospital_id,
+                ST_Y(ST_Transform(h.geom, 4326)) AS hospital_lat,
+                ST_X(ST_Transform(h.geom, 4326)) AS hospital_lon
+            FROM zensus.{census_table} p
+            CROSS JOIN LATERAL (
+                (SELECT id, geom FROM {schema}.{hospital_table} WHERE notfall = '1.0' ORDER BY p.geom <-> geom LIMIT 2)
+                UNION ALL
+                (SELECT id, geom FROM {schema}.{hospital_table} WHERE notfall = '2.0' ORDER BY p.geom <-> geom LIMIT 2)
+                UNION ALL
+                (SELECT id, geom FROM {schema}.{hospital_table} WHERE notfall = '3.0' ORDER BY p.geom <-> geom LIMIT 2)
+            ) h
+            LEFT JOIN {schema}.{cost_table} r ON p.{gitter_id} = r.gitter_id AND h.id = r.hospital_id
+            WHERE r.gitter_id IS NULL
+            AND p.{gitter_id} IN (
+                SELECT gitter_id FROM {schema}.{cost_table}
+                GROUP BY gitter_id HAVING COUNT(*) < 6
+            )
+            ORDER BY p.{gitter_id}, h.id
+        """).format(
+            gitter_id=psycopg.sql.Identifier(f"gitter_id_{resolution}"),
+            census_table=psycopg.sql.Identifier(f"alter_in_5_altersklassen_{resolution}"),
+            schema=psycopg.sql.Identifier("ems_germany_analysis"),
+            hospital_table=psycopg.sql.Identifier(hospital_table),
+            cost_table=psycopg.sql.Identifier(cost_table),
+        )
+
+    insert_sql = _INSERT_ROUTE_SQL_TEMPLATE.format(
+        schema=psycopg.sql.Identifier("ems_germany_analysis"),
+        table=psycopg.sql.Identifier(cost_table),
+    )
+    sentinel_sql = _INSERT_SENTINEL_SQL_TEMPLATE.format(
+        schema=psycopg.sql.Identifier("ems_germany_analysis"),
+        table=psycopg.sql.Identifier(cost_table),
+    )
+
+    try:
+        async with pool.connection() as conn:
+            async with conn.cursor() as cur:
+                # Sum of missing routes across all partially-processed census points.
+                count_sql = psycopg.sql.SQL("""
+                    SELECT COALESCE(SUM(6 - cnt), 0)
+                    FROM (
+                        SELECT COUNT(*) AS cnt
+                        FROM {schema}.{cost_table}
+                        GROUP BY gitter_id
+                        HAVING COUNT(*) < 6
+                    ) sub
+                """).format(
+                    schema=psycopg.sql.Identifier("ems_germany_analysis"),
+                    cost_table=psycopg.sql.Identifier(cost_table),
+                )
+                await cur.execute(count_sql)
+                (total,) = await cur.fetchone()
+
+        if total == 0:
+            click.echo("No incomplete records found. Nothing to clean up.")
+            return
+
+        with Progress() as progress:
+            task_id = progress.add_task(
+                f"Cleaning up {total} missing census-hospital pairs (ORS)",
+                total=total,
+            )
+
+            async with httpx.AsyncClient() as client:
+                async with pool.connection() as conn:
+                    async with conn.cursor(name="cleanup_cursor") as cur:
+                        await cur.execute(_build_cleanup_sql())
+                        while True:
+                            rows = await cur.fetchmany(page_size)
+                            if not rows:
+                                break
+                            await _process_multiple_ors_from_census(
+                                pool, client, rows, ors_url, insert_sql, sentinel_sql, progress, task_id
+                            )
+
+    finally:
+        await pool.close()

@@ -9,6 +9,7 @@ from .report import generate as generate_report_html
 from .routines import (
     ors_routing_analyze,
     ors_routing_analyze_from_census_point,
+    ors_routing_cleanup,
     pgrouting_analyze
 )
 
@@ -134,6 +135,60 @@ def ors_analyze(dsn, ors_url, hospital_table, log_file, buffer, resolution, meth
         asyncio.run(ors_routing_analyze(dsn, ors_url, hospital_table, buffer, resolution))
 
     logger.info("Import Finished")
+
+
+@emsde.command()
+@click.option(
+    "--dsn",
+    required=True,
+    envvar="EMSDE_DSN",
+    help="PostgreSQL connection string (or set EMSDE_DSN env var)."
+)
+@click.option(
+    "--ors-url",
+    required=True,
+    envvar="EMSDE_ORS_URL",
+    help="URL for open routing service (or set EMSDE_ORS_URL env var)."
+)
+@click.option(
+    "--hospital-table",
+    default="notfall_krankenhauser_geocoded",
+    envvar="EMSDE_HOSPITAL_TABLE",
+    help="Table storing hospital data (or set EMSDE_HOSPITAL_TABLE env var)."
+)
+@click.option(
+    "--log-file",
+    default=None,
+    envvar="EMSDE_LOG_FILE",
+    help="Write logs to this file instead of stderr (or set EMSDE_LOG_FILE env var).",
+    type=click.Path(dir_okay=False, writable=True),
+)
+@click.option(
+    "--resolution",
+    default="1km",
+    envvar="EMSDE_RESOLUTION",
+    help="Census grid resolution to use (default: 1km).",
+)
+def ors_cleanup(dsn, ors_url, hospital_table, log_file, resolution):
+    """
+    Re-route census-hospital pairs missing from a prior ors_analyze run.
+
+    Only processes census points that have some entries in the cost table but
+    fewer than the expected 6. Census points with no entries at all are left to
+    ors_analyze. Pairs that ORS cannot route are recorded as NULL sentinels so
+    this command never retries them.
+    """
+    _setup_logging(log_file)
+    logger = logging.getLogger(APP_NAME)
+    logger.info("Starting cleanup")
+
+    try:
+        resolution = ResolutionSuffix(resolution)
+    except ValueError as e:
+        raise click.ClickException(f"{e!r}")
+
+    asyncio.run(ors_routing_cleanup(dsn, ors_url, hospital_table, resolution))
+    logger.info("Cleanup finished")
 
 
 @emsde.command()
