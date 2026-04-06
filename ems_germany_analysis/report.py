@@ -218,12 +218,12 @@ SELECT
     state,
     COUNT(*)                                                                        AS census_cells,
     SUM(population)                                                                 AS total_population,
-    ROUND(SUM(population  * min_secs_any) / NULLIF(SUM(population),  0) / 60, 1)  AS mean_travel_all,
-    ROUND(SUM(pop_0_17    * min_secs_any) / NULLIF(SUM(pop_0_17),    0) / 60, 1)  AS mean_travel_0_17,
-    ROUND(SUM(pop_18_29   * min_secs_any) / NULLIF(SUM(pop_18_29),   0) / 60, 1)  AS mean_travel_18_29,
-    ROUND(SUM(pop_30_49   * min_secs_any) / NULLIF(SUM(pop_30_49),   0) / 60, 1)  AS mean_travel_30_49,
-    ROUND(SUM(pop_50_64   * min_secs_any) / NULLIF(SUM(pop_50_64),   0) / 60, 1)  AS mean_travel_50_64,
-    ROUND(SUM(pop_65plus  * min_secs_any) / NULLIF(SUM(pop_65plus),  0) / 60, 1)  AS mean_travel_65plus
+    ROUND((SUM(population  * min_secs_any) / NULLIF(SUM(population),  0) / 60), 1)  AS mean_travel_all,
+    ROUND((SUM(pop_0_17    * min_secs_any) / NULLIF(SUM(pop_0_17),    0) / 60), 1)  AS mean_travel_0_17,
+    ROUND((SUM(pop_18_29   * min_secs_any) / NULLIF(SUM(pop_18_29),   0) / 60), 1)  AS mean_travel_18_29,
+    ROUND((SUM(pop_30_49   * min_secs_any) / NULLIF(SUM(pop_30_49),   0) / 60), 1)  AS mean_travel_30_49,
+    ROUND((SUM(pop_50_64   * min_secs_any) / NULLIF(SUM(pop_50_64),   0) / 60), 1)  AS mean_travel_50_64,
+    ROUND((SUM(pop_65plus  * min_secs_any) / NULLIF(SUM(pop_65plus),  0) / 60), 1)  AS mean_travel_65plus
 FROM cell_state
 GROUP BY state
 ORDER BY state;

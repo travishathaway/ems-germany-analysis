@@ -139,6 +139,15 @@ async def create_route_cost_table(
         table=psycopg.sql.Identifier(table),
     ))
 
+    await cursor.execute(psycopg.sql.SQL("""
+        CREATE INDEX IF NOT EXISTS {idx_hospital}
+        ON {schema}.{table} (gitter_id)
+    """).format(
+        idx_gitter=psycopg.sql.Identifier(f"{table}_gitter_id_idx"),
+        schema=psycopg.sql.Identifier(schema),
+        table=psycopg.sql.Identifier(table),
+    ))
+
 
 # ---------------------------------------------------------------------------
 # Hex table creation (synchronous, used by report generation)

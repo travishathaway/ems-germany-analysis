@@ -366,28 +366,31 @@
     .col-span-2 { grid-column: span 2; }
     .col-span-3 { grid-column: span 3; }
 
-    /* ─── Map container ────────────────────────────────────────── */
-    .map-wrap {
-      width: 100%;
-      height: 520px;
-      display: block;
+    /* ─── Full-viewport map section ───────────────────────────── */
+    .map-viewport {
       position: relative;
+      height: calc(100vh - var(--nav-h));
+      overflow: hidden;
+      flex-shrink: 0;
     }
-
-    /* ─── Colour ramp preview ──────────────────────────────────── */
-    .colour-ramp {
-      height: 8px;
-      border-radius: 4px;
-      background: linear-gradient(to right, #dce8f5, #2563a8);
-      margin-top: 0.4rem;
+    #maplibre-container {
+      position: absolute;
+      inset: 0;
     }
-    .colour-ramp__labels {
+    .map-overlay-right {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      width: 270px;
       display: flex;
-      justify-content: space-between;
-      font-size: 0.62rem;
-      font-family: var(--ff-mono);
-      color: var(--ink-muted);
-      margin-top: 0.2rem;
+      flex-direction: column;
+      gap: 0.75rem;
+      z-index: 5;
+      max-height: calc(100% - 2rem);
+      overflow-y: auto;
+    }
+    .map-overlay-right .panel {
+      flex-shrink: 0;
     }
 
     /* ─── Tab bar (charts page) ────────────────────────────────── */
@@ -425,25 +428,29 @@
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 999px; }
 
-    /* ─── Sidebar layout (map page) ────────────────────────────── */
-    .map-layout {
-      display: grid;
-      grid-template-columns: 1fr 280px;
-      gap: 1.25rem;
-      align-items: start;
-    }
-    .map-sidebar { display: flex; flex-direction: column; gap: 1.25rem; }
-
     /* ─── Responsive ───────────────────────────────────────────── */
     @media (max-width: 900px) {
-      .map-layout { grid-template-columns: 1fr; }
       .grid-2, .grid-3 { grid-template-columns: 1fr; }
       .col-span-2, .col-span-3 { grid-column: span 1; }
+      .map-overlay-right { width: 220px; }
     }
 
     #demographic-pie-chart-cell .plot-container .svg-container {
       margin-left: auto;
       margin-right: auto;
+    }
+
+    #demographic-pie-chart-placeholder {
+      width: 150px;
+      height: auto;
+      margin-left: auto;
+      margin-right: auto;
+      margin-top: 30px;
+    }
+
+    #maplibre-container {
+      height: 100vh;
+      margin-right: 300px;
     }
   </style>
 </head>
@@ -518,100 +525,73 @@
     </div>
   </div>
 
-  <!-- Map content -->
-  <div class="content-area">
-    <div class="map-layout">
+  <!-- Map content: full-viewport with overlaid panels -->
+  <div class="map-viewport">
 
-      <!-- Main map panel -->
+    <!-- Map mounts here -->
+    <div id="maplibre-container"
+         data-pmtiles-dir="pmtiles"
+         data-hospitals-src="hospitals.geojson"></div>
+
+    <!-- Right-side overlay panels -->
+    <div class="map-overlay-right">
+
+      <!-- Mini histogram panel -->
       <div class="panel">
         <div class="panel__header">
           <div>
-            <div class="panel__title">Travel Time · Census Centroids to Emergency Hospitals</div>
-            <div class="panel__subtitle">Hover a hex to inspect details · Scroll to zoom</div>
+            <div class="panel__title">Distribution</div>
+            <div class="panel__subtitle">Travel time — all hospitals</div>
           </div>
         </div>
-
-        <!-- AccessibilityMap mounts here -->
         <div class="panel__body">
-          <div id="maplibre-container" class="map-wrap"
-               data-pmtiles-dir="pmtiles"
-               data-hospitals-src="hospitals.geojson"></div>
+          <chart-sidebar-hist src="chart-sidebar-hist.json" style="display:block;height:180px;"></chart-sidebar-hist>
         </div>
+      </div><!-- /histogram -->
 
-        <!-- Colour legend -->
-        <div style="padding: 0.75rem 1.25rem; border-top: 1px solid var(--border-light);">
-          <div style="font-size:0.67rem; font-family: var(--ff-mono); text-transform:uppercase; letter-spacing:0.08em; color:var(--ink-muted); margin-bottom:0.35rem;">
-            Travel time (minutes)
-          </div>
-          <div class="colour-ramp" style="background: linear-gradient(to right, #1a9641, #a6d96a, #ffffbf, #fdae61, #d7191c);"></div>
-          <div class="colour-ramp__labels">
-            <span>0</span><span>15</span><span>30</span><span>45</span><span>60+</span>
+      <!-- Info card -->
+      <div class="panel">
+        <div class="panel__header">
+          <div>
+            <div class="panel__title">Selected Hexagon</div>
+            <div class="panel__subtitle">Hover map to populate</div>
           </div>
         </div>
-
-        <div class="footnote">
-          Travel times modelled under off-peak road conditions using OSRM/ORS. Hospital locations sourced
-          from the German Hospital Directory (Krankenhausverzeichnis).
+        <div style="padding: 1rem 1.25rem; display:flex; flex-direction:column; gap:0.5rem;">
+          <div style="display:flex; justify-content:space-between; font-size:0.78rem; border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
+            <span style="color:var(--ink-muted)">Any hospital</span>
+            <span id="info-any" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:0.78rem; border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
+            <span style="color:var(--ink-muted)">Level 1</span>
+            <span id="info-l1" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:0.78rem; border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
+            <span style="color:var(--ink-muted)">Level 2</span>
+            <span id="info-l2" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:0.78rem; border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
+            <span style="color:var(--ink-muted)">Level 3</span>
+            <span id="info-l3" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:0.78rem; border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
+            <span style="color:var(--ink-muted)">Population (cell)</span>
+            <span id="info-pop" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:0.78rem;">
+            <span style="color:var(--ink-muted)">Age split (cell)</span>
+          </div>
+          <div>
+            <div id="demographic-pie-chart-cell"></div>
+            <div id="demographic-pie-chart-placeholder">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M19.9497 17.9497L15 13H22C22 14.933 21.2165 16.683 19.9497 17.9497Z" stroke="#c0bfbc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path> <path d="M20 10C20 6.13401 16.866 3 13 3V10H20Z" stroke="#c0bfbc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path> <path d="M2 12C2 16.4183 5.58172 20 10 20C12.2091 20 14.2091 19.1046 15.6569 17.6569L10 12V4C5.58172 4 2 7.58172 2 12Z" stroke="#c0bfbc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path> </g></svg>
+            </div>
+          </div>
         </div>
-      </div><!-- /main map panel -->
+      </div><!-- /info card -->
 
-      <!-- Sidebar -->
-      <div class="map-sidebar">
-
-        <!-- Mini histogram panel -->
-        <div class="panel">
-          <div class="panel__header">
-            <div>
-              <div class="panel__title">Distribution</div>
-              <div class="panel__subtitle">Travel time histogram — all hospitals</div>
-            </div>
-          </div>
-          <div class="panel__body">
-            <chart-sidebar-hist src="chart-sidebar-hist.json" style="display:block;height:180px;"></chart-sidebar-hist>
-          </div>
-        </div><!-- /histogram -->
-
-        <!-- Info card -->
-        <div class="panel">
-          <div class="panel__header">
-            <div>
-              <div class="panel__title">Selected Hexagon</div>
-              <div class="panel__subtitle">Hover map to populate</div>
-            </div>
-          </div>
-          <div style="padding: 1rem 1.25rem; display:flex; flex-direction:column; gap:0.5rem;">
-            <div style="display:flex; justify-content:space-between; font-size:0.78rem; border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
-              <span style="color:var(--ink-muted)">Any hospital</span>
-              <span id="info-any" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:0.78rem; border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
-              <span style="color:var(--ink-muted)">Level 1</span>
-              <span id="info-l1" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:0.78rem; border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
-              <span style="color:var(--ink-muted)">Level 2</span>
-              <span id="info-l2" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:0.78rem; border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
-              <span style="color:var(--ink-muted)">Level 3</span>
-              <span id="info-l3" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:0.78rem;border-bottom:1px solid var(--border-light); padding-bottom:0.4rem;">
-              <span style="color:var(--ink-muted)">Population (cell)</span>
-              <span id="info-pop" style="font-family:var(--ff-mono); font-size:0.72rem;">—</span>
-            </div>
-            <div style="display:flex; justify-content:space-between; font-size:0.78rem;">
-              <span style="color:var(--ink-muted)">Age split (cell)</span>
-            </div>
-            <div>
-              <div id="demographic-pie-chart-cell"></div>
-            </div>
-          </div>
-        </div><!-- /info card -->
-
-      </div><!-- /sidebar -->
-    </div><!-- /map-layout -->
-  </div><!-- /content-area -->
+    </div><!-- /map-overlay-right -->
+  </div><!-- /map-viewport -->
 </div><!-- /page-map -->
 
 

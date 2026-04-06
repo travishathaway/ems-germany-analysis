@@ -13,201 +13,131 @@
     document.head.appendChild(link);
   }
 
-  /* ── Build map controls HTML inside the container ────────────── */
+  /* ── Build map controls HTML (left-side panel, injected into map container) */
   const CONTROLS_HTML = `
     <style>
       #map-controls {
         position: absolute;
-        top: 12px;
-        left: 12px;
-        background: rgba(255,255,255,0.95);
-        padding: 12px 16px;
-        border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        top: 1rem;
+        left: 1rem;
+        background: var(--surface, #fff);
+        border: 1px solid var(--border, #dedad2);
+        border-radius: var(--radius, 6px);
+        box-shadow: var(--shadow, 0 1px 4px rgba(0,0,0,0.07), 0 4px 16px rgba(0,0,0,0.04));
         z-index: 10;
-        font-size: 0.85rem;
-        font-family: "Helvetica Neue", Arial, sans-serif;
+        width: 196px;
+        font-family: var(--ff-serif, 'Source Serif 4', Georgia, serif);
+        overflow: hidden;
       }
-      #map-controls strong { display: block; margin-bottom: 8px; color: #1a3a5c; }
-      .map-btn {
-        display: block;
-        width: 100%;
-        margin-bottom: 5px;
-        padding: 5px 10px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        background: #f5f5f5;
-        cursor: pointer;
-        font-size: 0.82rem;
-        text-align: left;
-        transition: background 0.15s;
+      .mc-section {
+        padding: 0.55rem 0.8rem;
+        border-bottom: 1px solid var(--border-light, #ebe8e0);
       }
-      .map-btn.active { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
-      .map-btn:hover:not(.active) { background: #e8eef5; }
-      hr { margin: 8px 0; border: none; border-top: 1px solid #ddd; }
-      label.hospital-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.82rem; }
-      #map-legend {
-        position: absolute;
-        bottom: 30px;
-        right: 12px;
-        background: rgba(255,255,255,0.95);
-        padding: 10px 14px;
-        border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        z-index: 10;
-        font-size: 0.82rem;
-        font-family: "Helvetica Neue", Arial, sans-serif;
-      }
-      #map-legend strong { display: block; margin-bottom: 6px; color: #1a3a5c; }
-      .legend-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-      .legend-grad { width: 130px; height: 12px; border-radius: 3px; background: linear-gradient(to right, #1a9641, #a6d96a, #ffffbf, #fdae61, #d7191c); }
-      .legend-labels { display: flex; justify-content: space-between; font-size: 0.78rem; color: #666; }
-      .panel-section-title { font-weight: 600; color: #1a3a5c; margin: 10px 0 4px; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; }
-      .panel-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-      .panel-table td { padding: 3px 0; }
-      .panel-table td:last-child { text-align: right; font-weight: 500; }
-    </style>
-    <div id="map-controls">
-      <strong>Show travel time to:</strong>
-      <button class="map-btn active" data-layer="any">Any hospital</button>
-      <button class="map-btn" data-layer="l1">Level 1 hospitals</button>
-      <button class="map-btn" data-layer="l2">Level 2 hospitals</button>
-      <button class="map-btn" data-layer="l3">Level 3 hospitals</button>
-      <hr>
-      <label class="hospital-toggle">
-        <input type="checkbox" id="toggle-hospitals" checked>
-        Show hospitals
-      </label>
-    </div>
-    <div id="map-legend">
-      <strong>Travel time (min)</strong>
-      <div class="legend-row"><div class="legend-grad"></div></div>
-      <div class="legend-labels"><span>0</span><span>15</span><span>30</span><span>45</span><span>60+</span></div>
-      <br>
-      <strong>Hospitals</strong>
-      <div class="legend-row">
-        <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#6b9ec7"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">1</text></svg>
-        Level 1
-      </div>
-      <div class="legend-row">
-        <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#9b7dbf"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">2</text></svg>
-        Level 2
-      </div>
-      <div class="legend-row">
-        <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#c4744d"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">3</text></svg>
-        Level 3
-      </div>
-    </div>
-  `;
-
-  /* Unused legacy template block kept for reference only */
-  const TEMPLATE = document.createElement('template');
-  TEMPLATE.innerHTML = `
-    <style>
-      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-      :host { display: block; position: relative; overflow: hidden; }
-      #map { width: 100%; height: 100%; }
-
-      #map-controls {
-        position: absolute;
-        top: 12px;
-        left: 12px;
-        background: rgba(255,255,255,0.95);
-        padding: 12px 16px;
-        border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        z-index: 10;
-        font-size: 0.85rem;
-        font-family: "Helvetica Neue", Arial, sans-serif;
-      }
-      #map-controls strong { display: block; margin-bottom: 8px; color: #1a3a5c; }
-      .map-btn {
-        display: block;
-        width: 100%;
-        margin-bottom: 5px;
-        padding: 5px 10px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        background: #f5f5f5;
-        cursor: pointer;
-        font-size: 0.82rem;
-        text-align: left;
-        transition: background 0.15s;
-      }
-      .map-btn.active { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
-      .map-btn:hover:not(.active) { background: #e8eef5; }
-      hr { margin: 8px 0; border: none; border-top: 1px solid #ddd; }
-      label.hospital-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.82rem; }
-
-      #map-legend {
-        position: absolute;
-        bottom: 30px;
-        right: 12px;
-        background: rgba(255,255,255,0.95);
-        padding: 10px 14px;
-        border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        z-index: 10;
-        font-size: 0.82rem;
-        font-family: "Helvetica Neue", Arial, sans-serif;
-      }
-      #map-legend strong { display: block; margin-bottom: 6px; color: #1a3a5c; }
-      .legend-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
-      .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
-      .legend-grad {
-        width: 130px; height: 12px; border-radius: 3px;
-        background: linear-gradient(to right, #1a9641, #a6d96a, #ffffbf, #fdae61, #d7191c);
-      }
-      .legend-labels { display: flex; justify-content: space-between; font-size: 0.78rem; color: #666; }
-
-      .panel-section-title {
+      .mc-section:last-child { border-bottom: none; }
+      .mc-label {
+        font-size: 0.62rem;
         font-weight: 600;
-        color: #1a3a5c;
-        margin: 10px 0 4px;
-        font-size: 0.82rem;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.08em;
+        color: var(--ink-muted, #8c8880);
+        margin-bottom: 0.35rem;
       }
-      .panel-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-      .panel-table td { padding: 3px 0; }
-      .panel-table td:last-child { text-align: right; font-weight: 500; }
+      .map-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        margin-bottom: 3px;
+        padding: 4px 8px;
+        border: 1px solid var(--border, #dedad2);
+        border-radius: 4px;
+        background: transparent;
+        cursor: pointer;
+        font-size: 0.73rem;
+        font-family: var(--ff-serif, 'Source Serif 4', Georgia, serif);
+        color: var(--ink, #1a1915);
+        text-align: left;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+      }
+      .map-btn svg { flex-shrink: 0; }
+      .map-btn:last-of-type { margin-bottom: 0; }
+      .map-btn.active {
+        background: var(--accent, #2563a8);
+        color: #fff;
+        border-color: var(--accent, #2563a8);
+      }
+      .map-btn:hover:not(.active) { background: var(--accent-light, #dce8f5); }
+      .mc-toggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+        font-size: 0.73rem;
+        color: var(--ink-mid, #4a4840);
+      }
+      .mc-grad {
+        height: 8px;
+        border-radius: 3px;
+        background: linear-gradient(to right, #1a9641, #a6d96a, #ffffbf, #fdae61, #d7191c);
+        margin-bottom: 3px;
+      }
+      .mc-grad-labels {
+        display: flex;
+        justify-content: space-between;
+        font-family: var(--ff-mono, 'Source Code Pro', monospace);
+        font-size: 0.6rem;
+        color: var(--ink-muted, #8c8880);
+      }
+      .mc-hosp-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 3px 0;
+        font-size: 0.73rem;
+        color: var(--ink-mid, #4a4840);
+      }
+      #travel-min-slider {
+        width: 100%;
+        margin-top: 5px;
+        accent-color: var(--accent, #2563a8);
+        cursor: pointer;
+      }
     </style>
-
-    <div id="map"></div>
-
     <div id="map-controls">
-      <strong>Show travel time to:</strong>
-      <button class="map-btn active" data-layer="any">Any hospital</button>
-      <button class="map-btn" data-layer="l1">Level 1 hospitals</button>
-      <button class="map-btn" data-layer="l2">Level 2 hospitals</button>
-      <button class="map-btn" data-layer="l3">Level 3 hospitals</button>
-      <hr>
-      <label class="hospital-toggle">
-        <input type="checkbox" id="toggle-hospitals" checked>
-        Show hospitals
-      </label>
-    </div>
-
-    <div id="map-legend">
-      <strong>Travel time (min)</strong>
-      <div class="legend-row"><div class="legend-grad"></div></div>
-      <div class="legend-labels"><span>0</span><span>15</span><span>30</span><span>45</span><span>60+</span></div>
-      <br>
-      <strong>Hospitals</strong>
-      <div class="legend-row">
-        <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#6b9ec7"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">1</text></svg>
-        Level 1
+      <div class="mc-section">
+        <div class="mc-label">Show travel time to</div>
+        <button class="map-btn active" data-layer="any">Any hospital</button>
+        <button class="map-btn" data-layer="l1">
+          <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#6b9ec7"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">1</text></svg>
+          <span class="map-btn-text">Basic</span>
+        </button>
+        <button class="map-btn" data-layer="l2">
+          <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#9b7dbf"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">2</text></svg>
+          <span class="map-btn-text">Extended</span>
+        </button>
+        <button class="map-btn" data-layer="l3">
+          <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#c4744d"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">3</text></svg>
+          <span class="map-btn-text">Comprehensive</span>
+        </button>
       </div>
-      <div class="legend-row">
-        <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#9b7dbf"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">2</text></svg>
-        Level 2
+      <div class="mc-section">
+        <div class="mc-label">Min travel time: <span id="travel-min-val">0</span> min</div>
+        <input type="range" id="travel-min-slider" min="0" max="60" value="0">
       </div>
-      <div class="legend-row">
-        <svg width="20" height="20" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#c4744d"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">3</text></svg>
-        Level 3
+      <div class="mc-section">
+        <label class="mc-toggle">
+          <input type="checkbox" id="toggle-hospitals" checked>
+          Show hospitals
+        </label>
+      </div>
+      <div class="mc-section">
+        <div class="mc-label">Travel time (min)</div>
+        <div class="mc-grad"></div>
+        <div class="mc-grad-labels"><span>0</span><span>15</span><span>30</span><span>45</span><span>60+</span></div>
       </div>
     </div>
   `;
+
 
   function loadScript(src) {
     return new Promise(resolve => {
@@ -309,14 +239,18 @@
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-    let currentProp = 'avg_travel_any';
+    let currentProp  = 'avg_travel_any';
+    let currentLevel = null;   // null = all levels; 1/2/3 = filter to that level
+    let minTravelMin = 0;      // slider threshold in minutes (0 = no filter)
 
     // Cluster state — declared here so the hospital toggle can access them
     const HOSP_COLORS = ['#6b9ec7', '#9b7dbf', '#c4744d'];
     const clusterMarkers = {};
     let clusterMarkersOnScreen = {};
-    let hospitalsVisible = true;
-    let updateClusterMarkers = () => {};   // replaced after map load
+    let hospitalsVisible    = true;
+    let updateClusterMarkers  = () => {};   // replaced after map load
+    let updateHospitalFilter  = () => {};   // replaced after map load
+    let updateHexFilter       = () => {};   // replaced after map load
 
     map.on('load', () => {
       map.addImage('hospital-1', makeHospitalIcon('1', '#6b9ec7'));
@@ -379,9 +313,15 @@
         return `<path d="M ${r + r0 * x0} ${r + r0 * y0} L ${r + r * x0} ${r + r * y0} A ${r} ${r} 0 ${largeArc} 1 ${r + r * x1} ${r + r * y1} L ${r + r0 * x1} ${r + r0 * y1} A ${r0} ${r0} 0 ${largeArc} 0 ${r + r0 * x0} ${r + r0 * y0}" fill="${color}" />`;
       }
 
-      function createClusterDonut(props) {
-        const counts = [props.lvl1 || 0, props.lvl2 || 0, props.lvl3 || 0];
+      // filterLevel: null = all levels, 1/2/3 = show only that level's segment.
+      // Returns null if no hospitals of the requested level exist in this cluster.
+      function createClusterDonut(props, filterLevel) {
+        const rawCounts = [props.lvl1 || 0, props.lvl2 || 0, props.lvl3 || 0];
+        const counts = filterLevel === null
+          ? rawCounts
+          : rawCounts.map((c, i) => (i + 1 === filterLevel ? c : 0));
         const total  = counts.reduce((a, b) => a + b, 0);
+        if (total === 0) return null;
         const offsets = counts.reduce((acc, c) => { acc.push(acc[acc.length - 1] + c); return acc; }, [0]);
         const fontSize = total >= 1000 ? 14 : total >= 100 ? 13 : 12;
         const r  = total >= 1000 ? 28 : total >= 100 ? 22 : 16;
@@ -399,7 +339,9 @@
         const el = document.createElement('div');
         el.style.cursor = 'pointer';
         el.innerHTML = svg;
-        el.title = `${total} hospitals (L1: ${counts[0]}, L2: ${counts[1]}, L3: ${counts[2]})`;
+        el.title = filterLevel === null
+          ? `${total} hospitals (L1: ${rawCounts[0]}, L2: ${rawCounts[1]}, L3: ${rawCounts[2]})`
+          : `${total} Level ${filterLevel} hospitals`;
         return el;
       }
 
@@ -411,11 +353,19 @@
         for (const feature of features) {
           const props = feature.properties;
           if (!props.cluster) continue;
-          const id = props.cluster_id;
 
+          // Skip clusters with none of the selected level
+          if (currentLevel !== null) {
+            const lvlKey = `lvl${currentLevel}`;
+            if (!props[lvlKey]) continue;
+          }
+
+          const id = props.cluster_id;
           let marker = clusterMarkers[id];
           if (!marker) {
-            marker = clusterMarkers[id] = new maplibregl.Marker({ element: createClusterDonut(props) })
+            const el = createClusterDonut(props, currentLevel);
+            if (!el) continue;
+            marker = clusterMarkers[id] = new maplibregl.Marker({ element: el })
               .setLngLat(feature.geometry.coordinates);
           }
           newMarkers[id] = marker;
@@ -427,6 +377,41 @@
         }
         clusterMarkersOnScreen = newMarkers;
       }
+
+      updateHospitalFilter = function () {
+        // Update individual hospital icon filter.
+        // Use consistent legacy filter syntax throughout — mixing legacy and
+        // expression syntax inside ['all', ...] is unreliable in MapLibre.
+        if (currentLevel === null) {
+          map.setFilter('hospitals-layer', ['!=', 'cluster', true]);
+        } else {
+          map.setFilter('hospitals-layer', ['all',
+            ['!=', 'cluster', true],
+            ['==', 'level', currentLevel],
+          ]);
+        }
+        // Rebuild cluster donuts with new filter (clear cache first)
+        for (const id in clusterMarkersOnScreen) clusterMarkersOnScreen[id].remove();
+        clusterMarkersOnScreen = {};
+        for (const id in clusterMarkers) delete clusterMarkers[id];
+        updateClusterMarkers();
+      };
+
+      // Apply (or clear) the min-travel-time threshold filter on hex layers.
+      // When minTravelMin > 0: show only cells where currentProp >= threshold
+      // (and the cell has data, i.e. value < 900). When 0: clear all filters.
+      const hexAllLayers = [
+        'hexagon-5km-fill',  'hexagon-5km-outline',
+        'hexagon-1km-fill',  'hexagon-1km-outline',
+        'hexagon-100m-fill', 'hexagon-100m-outline',
+      ];
+      updateHexFilter = function () {
+        const filter = minTravelMin === 0 ? null : ['all',
+          ['>=', ['coalesce', ['get', currentProp], 999], minTravelMin],
+          ['<',  ['coalesce', ['get', currentProp], 999], 900],
+        ];
+        hexAllLayers.forEach(id => map.setFilter(id, filter));
+      };
 
       map.on('data', (e) => {
         if (e.sourceId !== 'hospitals' || !e.isSourceLoaded) return;
@@ -468,12 +453,20 @@
             margin: {"t": 45, "b": 45, "l": 45, "r": 45},
             showlegend: false
           }
-
+          document.getElementById("demographic-pie-chart-placeholder").style.display = "none";
           Plotly.newPlot('demographic-pie-chart-cell', data, layout, {staticPlot: true})
         });
         map.on('mouseleave', layerId, () => {
           map.getCanvas().style.cursor = '';
-          panel.style.display = 'none';
+          if (infoAny) infoAny.textContent = '—';
+          if (infoL1)  infoL1.textContent  = '—';
+          if (infoL2)  infoL2.textContent  = '—';
+          if (infoL3)  infoL3.textContent  = '—';
+          if (infoPop) infoPop.textContent  = '—';
+
+          // Hide pie chart
+          document.getElementById("demographic-pie-chart-cell").innerHTML = "";
+          document.getElementById("demographic-pie-chart-placeholder").style.display = "block";
         });
       });
 
@@ -490,17 +483,27 @@
     });
 
     // Layer control buttons
-    const propMap = { any: 'avg_travel_any', l1: 'avg_travel_l1', l2: 'avg_travel_l2', l3: 'avg_travel_l3' };
+    const propMap  = { any: 'avg_travel_any', l1: 'avg_travel_l1', l2: 'avg_travel_l2', l3: 'avg_travel_l3' };
+    const levelMap = { any: null, l1: 1, l2: 2, l3: 3 };
     const fillLayers = ['hexagon-5km-fill', 'hexagon-1km-fill', 'hexagon-100m-fill'];
 
     wrapper.querySelectorAll('.map-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const layer = btn.dataset.layer;
-        currentProp = propMap[layer];
+        currentProp  = propMap[layer];
+        currentLevel = levelMap[layer];
         const color = makeTravelColor(currentProp);
         fillLayers.forEach(id => map.setPaintProperty(id, 'fill-color', color));
         wrapper.querySelectorAll('.map-btn').forEach(b => b.classList.toggle('active', b === btn));
+        updateHospitalFilter();
+        updateHexFilter();   // reapply threshold with updated currentProp
       });
+    });
+
+    wrapper.querySelector('#travel-min-slider').addEventListener('input', (e) => {
+      minTravelMin = Number(e.target.value);
+      wrapper.querySelector('#travel-min-val').textContent = minTravelMin;
+      updateHexFilter();
     });
 
     wrapper.querySelector('#toggle-hospitals').addEventListener('change', (e) => {
