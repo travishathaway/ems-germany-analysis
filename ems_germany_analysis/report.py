@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 import click
+import numpy as np
 import pandas as pd
 import platformdirs
 import psycopg
@@ -181,6 +182,53 @@ GROUP BY state, hospital_level
 ORDER BY state, hospital_level;
 """
 
+# Per-state, per-age-group mean travel time to nearest hospital (any level)
+SQL_STATE_AGE_BREAKDOWN = """
+WITH state_geoms AS (
+    SELECT name, ST_Union(geom) AS geom
+    FROM osm_germany.place_polygon_nested
+    WHERE name = ANY(%(state_names)s)
+    GROUP BY name
+),
+per_cell AS (
+    SELECT
+        r.gitter_id,
+        MIN(r.total_cost_seconds) AS min_secs_any
+    FROM ems_germany_analysis.{cost_table} r
+    WHERE r.total_cost_seconds IS NOT NULL
+    GROUP BY r.gitter_id
+),
+cell_state AS (
+    SELECT
+        p.gitter_id,
+        p.min_secs_any::numeric,
+        c.insgesamt_bevoelkerung AS population,
+        c.unter18                AS pop_0_17,
+        c.a18bis29               AS pop_18_29,
+        c.a30bis49               AS pop_30_49,
+        c.a50bis64               AS pop_50_64,
+        c.a65undaelter           AS pop_65plus,
+        s.name                   AS state
+    FROM per_cell p
+    JOIN zensus.alter_in_5_altersklassen_{resolution} c ON c.gitter_id_{resolution} = p.gitter_id
+    JOIN state_geoms s ON ST_Within(c.geom, s.geom)
+    WHERE c.insgesamt_bevoelkerung > 0
+)
+SELECT
+    state,
+    COUNT(*)                                                                        AS census_cells,
+    SUM(population)                                                                 AS total_population,
+    ROUND(SUM(population  * min_secs_any) / NULLIF(SUM(population),  0) / 60, 1)  AS mean_travel_all,
+    ROUND(SUM(pop_0_17    * min_secs_any) / NULLIF(SUM(pop_0_17),    0) / 60, 1)  AS mean_travel_0_17,
+    ROUND(SUM(pop_18_29   * min_secs_any) / NULLIF(SUM(pop_18_29),   0) / 60, 1)  AS mean_travel_18_29,
+    ROUND(SUM(pop_30_49   * min_secs_any) / NULLIF(SUM(pop_30_49),   0) / 60, 1)  AS mean_travel_30_49,
+    ROUND(SUM(pop_50_64   * min_secs_any) / NULLIF(SUM(pop_50_64),   0) / 60, 1)  AS mean_travel_50_64,
+    ROUND(SUM(pop_65plus  * min_secs_any) / NULLIF(SUM(pop_65plus),  0) / 60, 1)  AS mean_travel_65plus
+FROM cell_state
+GROUP BY state
+ORDER BY state;
+"""
+
 
 # ---------------------------------------------------------------------------
 # Data fetching
@@ -224,6 +272,23 @@ def _fetch_cached(
 
 LEVEL_COLORS = {1: "#4dac26", 2: "#f1b614", 3: "#d7191c"}
 LEVEL_NAMES  = {1: "Level 1 (Basic)", 2: "Level 2 (Advanced)", 3: "Level 3 (Comprehensive)"}
+
+# Age group display names, their df_cell column names, and chart colors
+AGE_GROUPS = [
+    ("0–17",  "pop_under18", "#2563a8"),
+    ("18–29", "pop_18to29",  "#1a7a6e"),
+    ("30–49", "pop_30to49",  "#d97706"),
+    ("50–64", "pop_50to64",  "#7c3aed"),
+    ("65+",   "pop_65plus",  "#c0392b"),
+]
+# Mapping from display name to SQL_STATE_AGE_BREAKDOWN column
+AGE_STATE_COLS = {
+    "0–17":  "mean_travel_0_17",
+    "18–29": "mean_travel_18_29",
+    "30–49": "mean_travel_30_49",
+    "50–64": "mean_travel_50_64",
+    "65+":   "mean_travel_65plus",
+}
 
 
 def chart_coverage_bars(df_cell: pd.DataFrame) -> dict:
@@ -353,8 +418,192 @@ def chart_states(df_states: pd.DataFrame) -> dict | None:
     }
 
 
+def _weighted_percentiles(values: np.ndarray, weights: np.ndarray, percentiles: list[float]) -> list[float]:
+    """Compute weighted percentiles. values and weights must be 1-D numpy arrays."""
+    if weights.sum() == 0:
+        return [float("nan")] * len(percentiles)
+    order = np.argsort(values)
+    vals  = values[order]
+    wts   = weights[order]
+    cum   = np.cumsum(wts)
+    total = cum[-1]
+    result = []
+    for p in percentiles:
+        thr = p / 100.0 * total
+        idx = int(np.searchsorted(cum, thr, side="left"))
+        idx = min(idx, len(vals) - 1)
+        result.append(float(vals[idx]))
+    return result
+
+
+def chart_sidebar_hist(df_cell: pd.DataFrame) -> dict:
+    """Population-weighted histogram of travel times to nearest hospital (any level)."""
+    sub = df_cell.dropna(subset=["min_secs_any"]).copy()
+    sub["min_min"] = sub["min_secs_any"] / 60
+    bins = list(range(0, 91, 5))
+    sub["bin"] = pd.cut(sub["min_min"], bins=bins, right=False)
+    pop_per_bin = sub.groupby("bin", observed=False)["population"].sum()
+    total = pop_per_bin.sum()
+    return {
+        "series": [{
+            "name":  "All hospitals",
+            "color": "#2563a8",
+            "x": [str(b) for b in pop_per_bin.index],
+            "y": (100 * pop_per_bin / total).round(2).tolist(),
+        }]
+    }
+
+
+def chart_age_box(df_cell: pd.DataFrame) -> dict:
+    """Population-weighted box-plot summary statistics per age group (min_secs_any)."""
+    sub = df_cell.dropna(subset=["min_secs_any"]).copy()
+    times = (sub["min_secs_any"] / 60).to_numpy()
+    groups = []
+    for label, pop_col, color in AGE_GROUPS:
+        if pop_col not in sub.columns:
+            continue
+        weights = sub[pop_col].fillna(0).to_numpy().astype(float)
+        if weights.sum() == 0:
+            continue
+        q1, median, q3 = _weighted_percentiles(times, weights, [25, 50, 75])
+        iqr = q3 - q1
+        # Weighted mean
+        mean_val = float(np.sum(times * weights) / weights.sum())
+        groups.append({
+            "name":        label,
+            "color":       color,
+            "q1":          round(q1, 2),
+            "median":      round(median, 2),
+            "q3":          round(q3, 2),
+            "lowerfence":  round(max(0, q1 - 1.5 * iqr), 2),
+            "upperfence":  round(q3 + 1.5 * iqr, 2),
+            "mean":        round(mean_val, 2),
+        })
+    return {"groups": groups}
+
+
+def chart_age_cdf(df_cell: pd.DataFrame) -> dict:
+    """CDF per age group: cumulative share of age-group population within X minutes."""
+    sub = df_cell.dropna(subset=["min_secs_any"]).copy()
+    sub["min_min"] = sub["min_secs_any"] / 60
+    sub = sub.sort_values("min_min")
+    series = []
+    for label, pop_col, color in AGE_GROUPS:
+        if pop_col not in sub.columns:
+            continue
+        group_pop = sub[pop_col].fillna(0)
+        total_pop = group_pop.sum()
+        if total_pop == 0:
+            continue
+        cum_pct = 100 * group_pop.cumsum() / total_pop
+        # Downsample for smooth curve
+        step = max(1, len(sub) // 5000)
+        series.append({
+            "name":  label,
+            "color": color,
+            "x": [round(v, 2) for v in sub["min_min"].iloc[::step].tolist()],
+            "y": [round(v, 2) for v in cum_pct.iloc[::step].tolist()],
+        })
+    return {"series": series}
+
+
+def chart_age_bar(df_cell: pd.DataFrame) -> dict:
+    """Population-weighted mean ± std travel time per age group (min_secs_any)."""
+    sub = df_cell.dropna(subset=["min_secs_any"]).copy()
+    times = (sub["min_secs_any"] / 60).to_numpy()
+    bars = []
+    for label, pop_col, color in AGE_GROUPS:
+        if pop_col not in sub.columns:
+            continue
+        weights = sub[pop_col].fillna(0).to_numpy().astype(float)
+        total_w = weights.sum()
+        if total_w == 0:
+            continue
+        mean_val = float(np.sum(times * weights) / total_w)
+        variance = float(np.sum(weights * (times - mean_val) ** 2) / total_w)
+        bars.append({
+            "name":  label,
+            "color": color,
+            "mean":  round(mean_val, 2),
+            "std":   round(variance ** 0.5, 2),
+        })
+    return {"bars": bars}
+
+
+def chart_bl_bar(df_states: pd.DataFrame) -> dict | None:
+    """Horizontal bar: median travel time by Bundesland for Level 3, sorted ascending."""
+    df3 = df_states[df_states["hospital_level"] == 3].copy()
+    if df3.empty:
+        return None
+    df3 = df3.sort_values("median_travel_min")
+    return {
+        "states":  df3["state"].tolist(),
+        "medians": [float(v) for v in df3["median_travel_min"].tolist()],
+    }
+
+
+def chart_bl_pct(df_states: pd.DataFrame) -> dict | None:
+    """Bar chart: % population >30 min from Level 3 hospital by Bundesland."""
+    df3 = df_states[df_states["hospital_level"] == 3].copy()
+    if df3.empty:
+        return None
+    df3 = df3.sort_values("pct_within_30min")
+    return {
+        "states":     df3["state"].tolist(),
+        "pct_over30": [round(100 - float(v), 1) for v in df3["pct_within_30min"].tolist()],
+    }
+
+
+def chart_bl_scatter(df_state_age: pd.DataFrame) -> dict | None:
+    """Scatter: population density proxy vs median travel time per Bundesland."""
+    if df_state_age.empty:
+        return None
+    df = df_state_age.copy()
+    df["density"] = df["total_population"] / df["census_cells"].replace(0, float("nan"))
+    df = df.dropna(subset=["density", "mean_travel_all"])
+    return {
+        "points": [
+            {
+                "state":   row["state"],
+                "density": round(float(row["density"]), 1),
+                "mean":    round(float(row["mean_travel_all"]), 1),
+            }
+            for _, row in df.iterrows()
+        ]
+    }
+
+
+def chart_combined_heat(df_state_age: pd.DataFrame) -> dict | None:
+    """Heatmap matrix: rows = Bundesland, columns = age group, values = mean travel time."""
+    if df_state_age.empty:
+        return None
+    age_labels = [label for label, _, _ in AGE_GROUPS]
+    states = df_state_age["state"].tolist()
+    z = []
+    for _, row in df_state_age.iterrows():
+        row_vals = []
+        for label in age_labels:
+            col = AGE_STATE_COLS[label]
+            row_vals.append(float(row[col]) if row[col] is not None else None)
+        z.append(row_vals)
+    return {"states": states, "age_groups": age_labels, "z": z}
+
+
+def chart_sm_age(df_state_age: pd.DataFrame, age_col: str, label: str) -> dict | None:
+    """Small multiple: horizontal bar of mean travel time by Bundesland for one age group."""
+    if df_state_age.empty or age_col not in df_state_age.columns:
+        return None
+    df = df_state_age[["state", age_col]].dropna(subset=[age_col])
+    df = df.sort_values(age_col)
+    return {
+        "label":  label,
+        "states": df["state"].tolist(),
+        "values": [round(float(v), 1) for v in df[age_col].tolist()],
+    }
+
+
 # ---------------------------------------------------------------------------
-# Summary table
+# Summary table (kept for reference; not used in new template)
 # ---------------------------------------------------------------------------
 
 def render_summary_table(df_summary: pd.DataFrame) -> str:
@@ -496,38 +745,29 @@ def build_hospitals_geojson(df_hospitals: pd.DataFrame) -> dict:
 # HTML assembly
 # ---------------------------------------------------------------------------
 
-def _chart_element(tag: str, src: str | None) -> str:
-    """Render a chart custom element with a src URL, or an empty element if no data."""
-    if src is None:
-        return f"<{tag}></{tag}>"
-    return f'<{tag} src="{src}"></{tag}>'
-
-
 def render_report(
-    summary_table_html: str,
-    chart_coverage_src: str,
-    chart_cdf_src: str,
-    chart_hist_src: str,
-    chart_equity_src: str,
-    chart_states_src: str | None,
-    total_cells: int,
-    data_note: str,
-    resolution: str = "1km",
+    kpi_median: float,
+    kpi_cov30: float,
+    kpi_underserved_m: float,
+    kpi_max: float,
+    kpi_states: int | str,
+    census_count: int,
+    hospital_count: int,
+    data_badge: str,
 ) -> str:
-    """Render the report HTML by loading the template and substituting placeholders."""
+    """Render the report HTML by loading the template and substituting KPI placeholders."""
     pkg = importlib.resources.files("ems_germany_analysis")
     template_text = pkg.joinpath("templates/report.html").read_text(encoding="utf-8")
     return (
         template_text
-        .replace("<!-- INSERT_RESOLUTION -->", resolution)
-        .replace("<!-- INSERT_DATA_NOTE -->", data_note)
-        .replace("<!-- INSERT_SUMMARY_TABLE -->", summary_table_html)
-        .replace("<!-- INSERT_CHART_COVERAGE -->", _chart_element("chart-coverage", chart_coverage_src))
-        .replace("<!-- INSERT_CHART_CDF -->",      _chart_element("chart-cdf",      chart_cdf_src))
-        .replace("<!-- INSERT_CHART_HIST -->",     _chart_element("chart-histogram", chart_hist_src))
-        .replace("<!-- INSERT_CHART_EQUITY -->",   _chart_element("chart-equity",   chart_equity_src))
-        .replace("<!-- INSERT_CHART_STATES -->",   _chart_element("chart-states",   chart_states_src))
-        .replace("<!-- INSERT_TOTAL_CELLS -->", f"{total_cells:,}")
+        .replace("<!-- INSERT_STAT_MEDIAN -->",     f"{kpi_median:.1f}")
+        .replace("<!-- INSERT_STAT_COV30 -->",      f"{kpi_cov30:.1f}")
+        .replace("<!-- INSERT_STAT_UNDERSERVED -->", f"{kpi_underserved_m:.2f}")
+        .replace("<!-- INSERT_STAT_MAX -->",         f"{kpi_max:.1f}")
+        .replace("<!-- INSERT_STAT_STATES -->",      str(kpi_states))
+        .replace("<!-- INSERT_CENSUS_COUNT -->",     f"{census_count:,}")
+        .replace("<!-- INSERT_HOSPITAL_COUNT -->",   f"{hospital_count:,}")
+        .replace("<!-- INSERT_DATA_BADGE -->",       data_badge)
     )
 
 
@@ -535,7 +775,7 @@ def render_report(
 # Main generate function
 # ---------------------------------------------------------------------------
 
-def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, resolution: str = "1km") -> None:
+def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cache: bool = True, resolution: str = "1km") -> None:
     """Generate a hospital accessibility report as a directory with index.html and PMTiles data."""
     if shutil.which("tippecanoe") is None:
         click.echo("Error: tippecanoe is not installed or not in PATH.", err=True)
@@ -544,9 +784,10 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
 
     cache_dir = _cache_dir()
     cost_table = f"census_hospital_route_from_census_{resolution}"
-    sql_summary = SQL_SUMMARY.format(cost_table=cost_table)
-    sql_per_cell = SQL_PER_CELL.format(cost_table=cost_table, resolution=resolution)
-    sql_states = SQL_STATES.format(cost_table=cost_table, resolution=resolution)
+    sql_summary    = SQL_SUMMARY.format(cost_table=cost_table)
+    sql_per_cell   = SQL_PER_CELL.format(cost_table=cost_table, resolution=resolution)
+    sql_states     = SQL_STATES.format(cost_table=cost_table, resolution=resolution)
+    sql_state_age  = SQL_STATE_AGE_BREAKDOWN.format(cost_table=cost_table, resolution=resolution)
 
     click.echo("Connecting to database…")
     try:
@@ -585,7 +826,8 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
         )
 
         if skip_states:
-            df_states = pd.DataFrame()
+            df_states    = pd.DataFrame()
+            df_state_age = pd.DataFrame()
             click.echo("Skipping state-level analysis (--skip-states).")
         else:
             click.echo("Fetching federal state breakdown (this may take a moment)…")
@@ -601,12 +843,28 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
                 click.echo(f"  State query failed ({e}); skipping.", err=True)
                 df_states = pd.DataFrame()
 
+            click.echo("Fetching state × age-group breakdown…")
+            try:
+                df_state_age = _fetch_cached(
+                    conn, sql_state_age,
+                    cache_dir / f"{cost_table}_state_age.pkl",
+                    use_cache,
+                    params={"state_names": GERMAN_STATES},
+                )
+                click.echo(f"  → {len(df_state_age):,} state rows")
+            except psycopg.Error as e:
+                click.echo(f"  State × age query failed ({e}); skipping.", err=True)
+                df_state_age = pd.DataFrame()
+
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    click.echo("Generating PMTiles…")
-    with psycopg.connect(dsn) as conn2:
-        generate_pmtiles(conn2, out_dir)
+    if not skip_tiles:
+        click.echo("Generating PMTiles…")
+        with psycopg.connect(dsn) as conn2:
+            generate_pmtiles(conn2, out_dir)
+    else:
+        click.echo("Skipping PMTiles generation…")
 
     click.echo("Building hospitals GeoJSON…")
     hospitals_geojson = build_hospitals_geojson(df_hospitals)
@@ -614,49 +872,72 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
     hospitals_path.write_text(json.dumps(hospitals_geojson), encoding="utf-8")
     click.echo(f"  → {len(hospitals_geojson['features']):,} hospital features")
 
+    # Compute KPI values from per-cell data
+    sub = df_cell.dropna(subset=["min_secs_any"])
+    total_pop = sub["population"].sum()
+    kpi_median = float(
+        np.average(
+            sub["min_secs_any"] / 60,
+            weights=sub["population"].clip(lower=0),
+        ) if total_pop > 0 else 0
+    )
+    kpi_cov30 = float(
+        100 * sub.loc[sub["min_secs_any"] <= 1800, "population"].sum() / total_pop
+        if total_pop > 0 else 0
+    )
+    kpi_underserved_m = float(
+        sub.loc[sub["min_secs_any"] > 1800, "population"].sum() / 1e6
+    )
+    kpi_max = float(sub["min_secs_any"].max() / 60)
+    kpi_states: int | str = len(df_states["state"].unique()) if not df_states.empty else "—"
+
     click.echo("Building charts…")
-    chart_data = {
-        "chart-coverage.json": chart_coverage_bars(df_cell),
-        "chart-cdf.json":      chart_cdf(df_cell),
-        "chart-hist.json":     chart_travel_histogram(df_cell),
-        "chart-equity.json":   chart_equity(df_cell),
-        "chart-states.json":   chart_states(df_states),
+    chart_data: dict[str, dict | None] = {
+        "chart-sidebar-hist.json": chart_sidebar_hist(df_cell),
+        "chart-age-box.json":      chart_age_box(df_cell),
+        "chart-age-cdf.json":      chart_age_cdf(df_cell),
+        "chart-age-bar.json":      chart_age_bar(df_cell),
+        "chart-bl-bar.json":       chart_bl_bar(df_states),
+        "chart-bl-pct.json":       chart_bl_pct(df_states),
+        "chart-bl-scatter.json":   chart_bl_scatter(df_state_age),
+        "chart-combined-heat.json": chart_combined_heat(df_state_age),
+        "chart-sm-0-17.json":      chart_sm_age(df_state_age, "mean_travel_0_17",  "0–17"),
+        "chart-sm-18-29.json":     chart_sm_age(df_state_age, "mean_travel_18_29", "18–29"),
+        "chart-sm-30-49.json":     chart_sm_age(df_state_age, "mean_travel_30_49", "30–49"),
+        "chart-sm-50-64.json":     chart_sm_age(df_state_age, "mean_travel_50_64", "50–64"),
+        "chart-sm-65plus.json":    chart_sm_age(df_state_age, "mean_travel_65plus", "65+"),
     }
     for filename, data in chart_data.items():
         if data is not None:
             (out_dir / filename).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    summary_tbl = render_summary_table(df_summary)
-
-    data_note = (
-        "Routing calculation is still in progress. Statistics reflect only the routes computed "
-        "so far and will change as more data is added."
-    )
 
     click.echo("Assembling HTML report…")
     html = render_report(
-        summary_table_html=summary_tbl,
-        chart_coverage_src="chart-coverage.json",
-        chart_cdf_src="chart-cdf.json",
-        chart_hist_src="chart-hist.json",
-        chart_equity_src="chart-equity.json",
-        chart_states_src="chart-states.json" if chart_data["chart-states.json"] is not None else None,
-        total_cells=len(df_cell),
-        data_note=data_note,
-        resolution=resolution,
+        kpi_median=kpi_median,
+        kpi_cov30=kpi_cov30,
+        kpi_underserved_m=kpi_underserved_m,
+        kpi_max=kpi_max,
+        kpi_states=kpi_states,
+        census_count=len(df_cell),
+        hospital_count=len(df_hospitals),
+        data_badge=f"{resolution} resolution",
     )
-
     index_path = out_dir / "index.html"
     index_path.write_text(html, encoding="utf-8")
 
     # Copy web component JS files from package templates to output directory
     pkg = importlib.resources.files("ems_germany_analysis")
     component_files = [
-        "chart-coverage.js",
-        "chart-cdf.js",
-        "chart-histogram.js",
-        "chart-equity.js",
-        "chart-states.js",
         "accessibility-map.js",
+        "chart-sidebar-hist.js",
+        "chart-age-box.js",
+        "chart-age-cdf.js",
+        "chart-age-bar.js",
+        "chart-bl-bar.js",
+        "chart-bl-scatter.js",
+        "chart-bl-pct.js",
+        "chart-combined-heat.js",
+        "chart-sm-age.js",
     ]
     for js_file in component_files:
         text = pkg.joinpath(f"templates/{js_file}").read_text(encoding="utf-8")
@@ -665,9 +946,8 @@ def generate(dsn: str, output: str, skip_states: bool, use_cache: bool = True, r
     click.echo(f"  → hospitals.geojson ({hospitals_path.stat().st_size / 1024:.0f} KB)")
     click.echo(f"  → index.html        ({index_path.stat().st_size / 1024:.0f} KB)")
     for js_file in component_files:
-        click.echo(f"  → {js_file:<30} ({(out_dir / js_file).stat().st_size / 1024:.0f} KB)")
-    for filename in chart_data:
-        p = out_dir / filename
-        if p.exists():
-            click.echo(f"  → {filename:<30} ({p.stat().st_size / 1024:.0f} KB)")
+        click.echo(f"  → {js_file:<32} ({(out_dir / js_file).stat().st_size / 1024:.0f} KB)")
+    for filename, data in chart_data.items():
+        if data is not None:
+            click.echo(f"  → {filename:<32} ({(out_dir / filename).stat().st_size / 1024:.0f} KB)")
     click.echo(f"Report written to: {out_dir}/")

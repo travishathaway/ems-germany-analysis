@@ -210,6 +210,11 @@ def ors_cleanup(dsn, ors_url, hospital_table, log_file, resolution):
     help="Skip the federal state spatial join (slow for large datasets).",
 )
 @click.option(
+    "--skip-tiles",
+    is_flag=True,
+    help="Skip generating PMTiles .",
+)
+@click.option(
     "--no-cache",
     is_flag=True,
     help="Force re-fetch all data from the database, ignoring cached DataFrames.",
@@ -220,12 +225,12 @@ def ors_cleanup(dsn, ors_url, hospital_table, log_file, resolution):
     envvar="EMSDE_RESOLUTION",
     help="Census grid resolution to use for the report (default: 1km).",
 )
-def report(dsn, output, skip_states, no_cache, resolution):
+def report(dsn, output, skip_states, skip_tiles, no_cache, resolution):
     """
     Generate a hospital accessibility report as a directory containing
     index.html and GeoJSON data files.
     """
-    generate_report_html(dsn, output, skip_states, use_cache=not no_cache, resolution=resolution)
+    generate_report_html(dsn, output, skip_states, skip_tiles, use_cache=not no_cache, resolution=resolution)
 
 
 if __name__ == "__main__":
