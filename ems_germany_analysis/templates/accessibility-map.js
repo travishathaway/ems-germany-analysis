@@ -188,7 +188,7 @@
     // Inject controls HTML and a #map div into the wrapper
     wrapper.style.position = 'relative';
     wrapper.style.overflow = 'hidden';
-    wrapper.innerHTML = CONTROLS_HTML + '<div id="map" style="position:absolute;inset:0;"></div>';
+    wrapper.innerHTML = '<div id="map" style="position:absolute;inset:0;"></div>';
 
     const mapEl   = wrapper.querySelector('#map');
     const content = wrapper.querySelector('#hex-info-content');
@@ -487,26 +487,26 @@
     const levelMap = { any: null, l1: 1, l2: 2, l3: 3 };
     const fillLayers = ['hexagon-5km-fill', 'hexagon-1km-fill', 'hexagon-100m-fill'];
 
-    wrapper.querySelectorAll('.map-btn').forEach(btn => {
+    document.querySelectorAll('.map-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const layer = btn.dataset.layer;
         currentProp  = propMap[layer];
         currentLevel = levelMap[layer];
         const color = makeTravelColor(currentProp);
         fillLayers.forEach(id => map.setPaintProperty(id, 'fill-color', color));
-        wrapper.querySelectorAll('.map-btn').forEach(b => b.classList.toggle('active', b === btn));
+        document.querySelectorAll('.map-btn').forEach(b => b.classList.toggle('active', b === btn));
         updateHospitalFilter();
         updateHexFilter();   // reapply threshold with updated currentProp
       });
     });
 
-    wrapper.querySelector('#travel-min-slider').addEventListener('input', (e) => {
+    document.querySelector('#travel-min-slider').addEventListener('input', (e) => {
       minTravelMin = Number(e.target.value);
-      wrapper.querySelector('#travel-min-val').textContent = minTravelMin;
+      document.querySelector('#travel-min-val').textContent = minTravelMin;
       updateHexFilter();
     });
 
-    wrapper.querySelector('#toggle-hospitals').addEventListener('change', (e) => {
+    document.querySelector('#toggle-hospitals').addEventListener('change', (e) => {
       hospitalsVisible = e.target.checked;
       map.setLayoutProperty('hospitals-layer', 'visibility', hospitalsVisible ? 'visible' : 'none');
       if (hospitalsVisible) {

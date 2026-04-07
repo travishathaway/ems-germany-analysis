@@ -176,13 +176,13 @@
     }
     .page-header__meta {
       display: flex;
-      gap: 1.25rem;
-      margin-top: 1rem;
+      flex-direction: column;
+      gap: 0.5rem;
       font-size: 0.75rem;
       color: var(--ink-muted);
       font-style: italic;
     }
-    .page-header__meta span { display: flex; align-items: center; gap: 0.3rem; }
+    .page-header__meta span { display: flex; align-items: row; gap: 0.3rem; }
 
     /* ─── Stat Strip ───────────────────────────────────────────── */
     .stat-strip {
@@ -193,13 +193,14 @@
     }
     .stat-item {
       flex: 1;
-      padding: 0.9rem 0;
       border-right: 1px solid var(--border-light);
       display: flex;
       flex-direction: column;
       gap: 0.15rem;
+      padding-left: 0.9rem;
+      padding-bottom: 0.9rem;
     }
-    .stat-item:first-child { padding-left: 0; }
+    .stat-item:first-child { padding-top: 0.9rem; }
     .stat-item:last-child { border-right: none; padding-right: 0; }
     .stat-item__label {
       font-size: 0.67rem;
@@ -452,6 +453,93 @@
       height: 100vh;
       margin-right: 300px;
     }
+    #map-controls {
+      position: absolute;
+      top: 1rem;
+      left: 1rem;
+      background: var(--surface, #fff);
+      border: 1px solid var(--border, #dedad2);
+      border-radius: var(--radius, 6px);
+      box-shadow: var(--shadow, 0 1px 4px rgba(0,0,0,0.07), 0 4px 16px rgba(0,0,0,0.04));
+      z-index: 10;
+      width: 300px;
+      font-family: var(--ff-serif, 'Source Serif 4', Georgia, serif);
+      overflow: scroll;
+      max-height: calc(100% - 2rem);
+    }
+    .mc-section {
+      padding: 0.55rem 0.8rem;
+      border-bottom: 1px solid var(--border-light, #ebe8e0);
+    }
+    .mc-section:last-child { border-bottom: none; }
+    .mc-label {
+      font-size: 0.62rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--ink-muted, #8c8880);
+      margin-bottom: 0.35rem;
+    }
+    .map-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      margin-bottom: 3px;
+      padding: 4px 8px;
+      border: 1px solid var(--border, #dedad2);
+      border-radius: 4px;
+      background: transparent;
+      cursor: pointer;
+      font-size: 0.73rem;
+      font-family: var(--ff-serif, 'Source Serif 4', Georgia, serif);
+      color: var(--ink, #1a1915);
+      text-align: left;
+      transition: background 0.12s, color 0.12s, border-color 0.12s;
+    }
+    .map-btn svg { flex-shrink: 0; }
+    .map-btn:last-of-type { margin-bottom: 0; }
+    .map-btn.active {
+      background: var(--accent, #2563a8);
+      color: #fff;
+      border-color: var(--accent, #2563a8);
+    }
+    .map-btn:hover:not(.active) { background: var(--accent-light, #dce8f5); }
+    .mc-toggle {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      font-size: 0.73rem;
+      color: var(--ink-mid, #4a4840);
+    }
+    .mc-grad {
+      height: 8px;
+      border-radius: 3px;
+      background: linear-gradient(to right, #1a9641, #a6d96a, #ffffbf, #fdae61, #d7191c);
+      margin-bottom: 3px;
+    }
+    .mc-grad-labels {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--ff-mono, 'Source Code Pro', monospace);
+      font-size: 0.6rem;
+      color: var(--ink-muted, #8c8880);
+    }
+    .mc-hosp-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin: 3px 0;
+      font-size: 0.73rem;
+      color: var(--ink-mid, #4a4840);
+    }
+    #travel-min-slider {
+      width: 100%;
+      margin-top: 5px;
+      accent-color: var(--accent, #2563a8);
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -460,7 +548,7 @@
 <nav class="topnav">
   <a class="topnav__brand" href="#">
     <span class="topnav__brand-title">Hospital Accessibility in Germany</span>
-    <span class="topnav__brand-sub">A study on how close we are to our hospitals</span>
+    <span class="topnav__brand-sub">A study on emergency service proximity</span>
   </a>
   <div class="topnav__divider"></div>
   <ul class="topnav__pages">
@@ -484,49 +572,59 @@
 
 <!-- ═══════════════════════════ PAGE 1: MAP ═══════════════════════ -->
 <div class="page active" id="page-map">
-
-  <!-- Header -->
-  <div class="page-header">
-    <p class="page-header__eyebrow">Section 1 of 2 · Spatial Analysis</p>
-    <h1 class="page-header__title">Emergency Hospital Accessibility</h1>
-    <p class="page-header__desc">
-      Estimated travel time from each census centroid to the nearest hospital offering
-      emergency medical services (Notaufnahme). Modeled by road network under
-      off-peak conditions.
-    </p>
-    <div class="page-header__meta">
-      <span>🏥 <!-- INSERT_HOSPITAL_COUNT --> hospitals with emergency services</span>
-      <span>📍 <!-- INSERT_CENSUS_COUNT -->+ census centroids</span>
-      <span>🛣 Road-network routing (OSM)</span>
-    </div>
-  </div>
-
   <!-- Stat strip -->
-  <div class="stat-strip">
-    <div class="stat-item">
-      <span class="stat-item__label">Median travel time</span>
-      <span class="stat-item__value"><!-- INSERT_STAT_MEDIAN --> <em>min</em></span>
-    </div>
-    <div class="stat-item">
-      <span class="stat-item__label">≤ 30 min coverage</span>
-      <span class="stat-item__value"><!-- INSERT_STAT_COV30 --> <em>%</em></span>
-    </div>
-    <div class="stat-item">
-      <span class="stat-item__label">Population underserved (&gt;30 min)</span>
-      <span class="stat-item__value"><!-- INSERT_STAT_UNDERSERVED --> <em>M</em></span>
-    </div>
-    <div class="stat-item">
-      <span class="stat-item__label">Max observed time</span>
-      <span class="stat-item__value"><!-- INSERT_STAT_MAX --> <em>min</em></span>
-    </div>
-    <div class="stat-item">
-      <span class="stat-item__label">Bundesländer analysed</span>
-      <span class="stat-item__value"><!-- INSERT_STAT_STATES --></span>
-    </div>
-  </div>
 
   <!-- Map content: full-viewport with overlaid panels -->
   <div class="map-viewport">
+    <div id="map-controls">
+      <div class="mc-section">
+        <p class="page-header__eyebrow">Section 1 of 2 · Spatial Analysis</p>
+        <h1 class="page-header__title">Emergency Hospital Accessibility</h1>
+        <p class="page-header__desc">
+          Estimated travel time from each census centroid to the nearest hospital offering
+          emergency medical services (Notaufnahme). Modeled by road network under
+          off-peak conditions.
+        </p>
+      </div>
+      <div class="mc-section">
+        <div class="mc-label">Show travel time to</div>
+        <button class="map-btn active" data-layer="any">Any hospital</button>
+        <button class="map-btn" data-layer="l1">
+          <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#6b9ec7"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">1</text></svg>
+          <span class="map-btn-text">Basic</span>
+        </button>
+        <button class="map-btn" data-layer="l2">
+          <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#9b7dbf"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">2</text></svg>
+          <span class="map-btn-text">Extended</span>
+        </button>
+        <button class="map-btn" data-layer="l3">
+          <svg width="16" height="16" viewBox="0 0 20 20"><circle cx="10" cy="10" r="9" fill="#c4744d"/><text x="10" y="14" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" font-weight="bold" fill="#fff">3</text></svg>
+          <span class="map-btn-text">Comprehensive</span>
+        </button>
+      </div>
+      <div class="mc-section">
+        <div class="mc-label">Min travel time: <span id="travel-min-val">0</span> min</div>
+        <input type="range" id="travel-min-slider" min="0" max="60" value="0">
+      </div>
+      <div class="mc-section">
+        <label class="mc-toggle">
+          <input type="checkbox" id="toggle-hospitals" checked>
+          Show hospitals
+        </label>
+      </div>
+      <div class="mc-section">
+        <div class="mc-label">Travel time (min)</div>
+        <div class="mc-grad"></div>
+        <div class="mc-grad-labels"><span>0</span><span>15</span><span>30</span><span>45</span><span>60+</span></div>
+      </div>
+      <div class="mc-section">
+        <div class="page-header__meta">
+          <div>🏥 hospital data: © Statististische Ämter des Bundes und der Länder </div>
+          <div>📍 census data: © Statistisches Bundesamt (Destatis)</div>
+          <div>🛣 Road-network routing: © OpenStreetMap</div>
+        </div>
+      </div>
+    </div>
 
     <!-- Map mounts here -->
     <div id="maplibre-container"
@@ -536,18 +634,23 @@
     <!-- Right-side overlay panels -->
     <div class="map-overlay-right">
 
-      <!-- Mini histogram panel -->
+      <!-- Summary stats panel -->
       <div class="panel">
-        <div class="panel__header">
-          <div>
-            <div class="panel__title">Distribution</div>
-            <div class="panel__subtitle">Travel time — all hospitals</div>
+        <div class="panel__body">
+          <div class="stat-item">
+            <span class="stat-item__label">Median travel time</span>
+            <span class="stat-item__value"><!-- INSERT_STAT_MEDIAN --> <em>min</em></span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-item__label">≤ 30 min coverage</span>
+            <span class="stat-item__value"><!-- INSERT_STAT_COV30 --> <em>%</em></span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-item__label">Population underserved (&gt;30 min)</span>
+            <span class="stat-item__value"><!-- INSERT_STAT_UNDERSERVED --> <em>M</em></span>
           </div>
         </div>
-        <div class="panel__body">
-          <chart-sidebar-hist src="chart-sidebar-hist.json" style="display:block;height:180px;"></chart-sidebar-hist>
-        </div>
-      </div><!-- /histogram -->
+      </div>
 
       <!-- Info card -->
       <div class="panel">
@@ -823,7 +926,6 @@
 </script>
 
 <script src="accessibility-map.js"></script>
-<script src="chart-sidebar-hist.js"></script>
 <script src="chart-age-box.js"></script>
 <script src="chart-age-cdf.js"></script>
 <script src="chart-age-bar.js"></script>
