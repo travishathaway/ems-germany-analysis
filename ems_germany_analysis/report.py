@@ -374,9 +374,9 @@ def _fetch_cached(
 
 # ---------------------------------------------------------------------------
 # Chart builders
-# ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
 
-LEVEL_COLORS = {1: "#4dac26", 2: "#f1b614", 3: "#d7191c"}
+LEVEL_COLORS = {1: "#6b9ec7", 2: "#9b7dbf", 3: "#c4744d"}
 LEVEL_NAMES  = {1: "Level 1 (Basic)", 2: "Level 2 (Advanced)", 3: "Level 3 (Comprehensive)"}
 
 # Age group display names, their df_cell column names, and chart colors

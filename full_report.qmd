@@ -16,18 +16,52 @@ With the introduction of the Krankenhausversorgungsverbesserungsgesetzt (Hospita
 
 In 2024, Germany passed a hospital reform act with aims to restructure the way hospitals are financed across the country [@noauthor_krankenhausreform_2024]. Currently, hospitals are funded based on the amount of hospital beds they offer. Once the reform act is implemented, hospitals will instead be funded on the types of services they offer with greater abilities for the government to centrally plan the allocation of these services in order to drive up quality of care.
 
-This restructure is projected to have real effects on the ways that hospitals are run and operated across Germany. For example, at 7.7 hospital beds per 1,000 inhabitants, Germany has one of the highest amounts of hospitals beds across Europe [@oecd_health_2025]. At a national level this is seen as problematic because of how expensive it is to maintain these beds, so expensive that it has reportedly led many of these hospitals to the brink of bankruptcy [@knight_germany_2024]. Among OECD countries, Germany also pays amongst the highest on health care as a percentage of GDP. According to politicians, this law will drive consolidation and hospital closures to reduce the number of what they deem as unnecessary hospital beds and drive down total spending on health care [@zimmermann_welche_2026].
+This restructure is projected to have real effects on the ways that hospitals are run and operated across Germany. For example, at 7.7 hospital beds per 1,000 inhabitants, Germany has one of the highest amounts of hospitals beds across Europe [@oecd_health_2025]. At a national level this is seen as problematic because of how expensive it is to maintain these beds, so expensive that it has reportedly led many of these hospitals to the brink of bankruptcy [@knight_germany_2024].   Among OECD countries, Germany also pays among the highest on health care as a percentage of GDP. According to politicians, this law will drive consolidation and hospital closures to reduce the number of what they deem as unnecessary hospital beds and drive down total spending on health care [@zimmermann_welche_2026].
 
-With this ongoing political debate and desire to shape the future of Germany's medical care as a backdrop, this study intends to investigate current access to emergency medical facilities. Access to these services will be broken down along population age groups and type of hospital (levels 1-3). To better direct the research, the following questions will be asked:
+With this ongoing political debate and desire to shape the future of Germany's medical care as a backdrop, this study intends to investigate current spatial accessibility to emergency medical services (EMS) across the entire country. Data from the 2022 census and Krankenhausverzeichnis (hospital registry) will be used to conduct a travel cost analysis with OpenStreetMap road network data to see how far away German residents are from their EMS providers. To better direct the research, the following questions will be asked:
 
-1. How does travel time to emergency medical service vary across age groups (under 18, 18–29, 30–49, 50–64, and 65+) in Germany, and do older age cohorts experience systematically greater or lesser access to higher-level hospital facilities (Levels 2–3)?
+1. How does travel time to EMS vary across age groups (under 18, 18–29, 30–49, 50–64, and 65+) in Germany, and do older age cohorts experience systematically greater or lesser access to higher-level hospital facilities (Levels 2–3)?
 
-2. How does travel time to emergency medical service vary across Germany's Bundesländer, and do certain Bundesländer exhibit systematic disadvantages in access to higher-level facilities that intersect with demographic composition?
+2. How does travel time to EMS vary across Germany's Bundesländer, and do certain Bundesländer exhibit systematic disadvantages in access to higher-level facilities with demographic composition?
 
-## Cumulative Population Accessibility
+## Background
 
-The following chart shows the cumulative share of the German population within a given travel time
-to their nearest hospital, broken down by hospital level (1 = basic, 2 = advanced, 3 = comprehensive).
+There have been many previous studies on spacial accessibility of EMS both in and outside of Germany. @vaz_distance_2014 found that distance and severity of the incident plays and important role when patients consider whether make use of EMS. A 2021 study from Poland examined improvements made to EMS over a decade between 2011 and 2021 [@kisiala_population_2022]. On top of spacial accessibility, other studies have been done to assess the quality of helicopter landing pads for entire country of Germany [@wolff_cleared_2025]. Because timely care is especially important in the case of stroke and heart infarction, several attempts have been to assess access to stroke units and even map out their availability [@science_media_center_schlaganfallversorgung_2024]. @hengel_regional_2024 focused specifically on regional differences in stroke unit access and found that 94.7% of Germany's population lives within 30 minutes of a stroke unit.
+
+While not considered academic research, the statistics office of the Bund und Länder of Germany (Statistisches Ämter des Bundes und der Länder) conducted their own spacial accessibility analysis of hospitals in Germany based on census data from 2022 and the hospital registry [@statistisches_bundesamt_krankenhausatlas_nodate]. This work was in large part spurred by the hospital transparency act (Krankenhaustransparenzgesetz) of 2024 that also coincided with the reforms mentioned previously [@germany_krankenhaustransparenzgesetz_2024]. This online map offers users the ability to see the coverage of various types of hospitals and clinics throughout the entire country of Germany.
+
+## Study design
+
+Given that so much work has been previously done with accessing spacial accessibility within Germany, I decided to focus this study on something I have yet to come across: differences in access among age groups. The German Census makes this data available in several categories, and I decided to five age groups of 0-17, 18-29, 30-49, 50-64 and 65+. The goal would be identify areas with potentially large disparities and recommend them for follow up studies and research. Additionally, because previous had also found differences among Bundesländer, I felt it also necessary to include these groups in the analysis too, so I could also show whether potential age disparities exist there too.
+
+### Defining emergency levels
+
+On top of age groups and Bundesländer, the emergency level (Notfallstufe) is the other factor used to split up this analysis; therefore, it is important to define exactly what levels mean and what type of services one can expect at each type of facility. In April of 2018, a joint federal committee of the German government established three different levels of emergency care service: basic emergency care (level one; Basisnotfallversorgung), extended emergency care (level two; Erweiterte Notfallversorgung) and comprehensive emergency care (level three; Umfassende Notfallversorgung) [@gemeinsamer_bundesausschuss_regelungen_2018]. All hospitals claiming to provide at least a "level one" quality of care must provide among other things six hospital beds, three of which are equipped with a ventilator; surgery and internal medicine departments and access to anaesthesia within 30 minutes. "Level two" requires everything from level one plus a total of four specialist departments (e.g. neurology or cardiology); 10 beds all of which are equipped with ventilators; and a helicopter landing pad. Finally, "level three" requires everything from level 2 plus three more specialist departments (total of seven); 20 beds all of which are equipped with ventilators; and all of the diagnostic medical equipment must be located on premise [@gemeinsamer_bundesausschuss_regelungen_2018]. For a detailed breakdown, see @tbl-notfallstufen.
+
+| | Level 1 - Basic Emergency Care | Level 2 - Extended | Level 3 - Comprehensive |
+|-|--------------------------------|--------------------|-------------------------|
+| **Required Departments** | Surgery/Trauma Surgery + Internal Medicine | + 4 additional departments (min. 2 from Cat. A, e.g. Neurology, Cardiology) | + 7 additional departments (min. 5 from Cat. A) |
+| **ICU Beds (minimum)** | 6 beds, of which 3 ventilator-capable | 10 beds, all ventilator-capable; admission of ventilated patients within 60 min. | 20 beds, all ventilator-capable; admission of ventilated patients within 60 min. |
+| **Medical Technology (additional)** | Shock room + CT (24h, cooperative provision permitted) | + MRI, PCI (continuous), emergency endoscopy, stroke diagnostics | Same as Level 2 — but all equipment mandatory on-site |
+| **Helicopter Access** | Not required; air transfer possible via ground intermediate transport | Helipad required (exceptions permitted) | Helipad required; direct transfer without intermediate ground transport |
+| **Emergency Admission Structure** | Central Emergency Department (ZNA); triage within 10 min.; documentation | + Attached observation ward (min. 6 beds, stay typically <24h) | Fulfils all requirements from Level 1 + 2 |
+| **Staffing** | Designated emergency physician + nurse; specialists in Internal Medicine/Surgery/Anaesthesia within 30 min. | Same requirements as Level 1 | Same requirements as Level 1 |
+
+: Summary of emergency levels {#tbl-notfallstufen}
+
+## Methods
+
+To conduct the analysis, several datasets were used including OpenStreetMap, Krankenhausverzeichnis and 2022 German census [@statistische_amter_des_bundes_und_der_lander_krankenhausverzeichnis_2025; @openstreetmap_openstreetmap_2026; @statistisches_bundesamt_zensus_2024]. PostgreSQL with PostGIS was used to store much of this data and a tool called zensus2pgsql that the author wrote was also used to prepare the census data for analysis [@hathaway_zensus2pgsql_2025]. To aid with the analysis, an open-source tool called, "ems-germany-analysis" was created and published under an MIT license on GitHub specifically for this study [@hathaway_ems_2026].
+
+The tool runs the analysis by calculating travel cost in seconds between census points and the nearest EMS facility for each emergency level. To calculate this travel cost a two-pass approach was used: first we use a nearest neighbor sort with PostGIS to find the nearest straight-line distance hospital. After we have these pairings, openrouteservice was used to calculate network distance include cost in seconds [@heigit_heidelberg_institute_for_geoinformation_technology_openrouteservice_2026]. The 1km resolution was primarily used because it offered the best trade-off between accuracy and performance. To account for hospitals that may have considerably longer network distances than straight-line distance, the nearest three EMS facilities for each emergency level for each census point was found.
+
+When calculating the cost in seconds for each route between census points and hospitals, the route itself was saved too. This proved effective for debugging discrepancies in the data and was generally a nice addition for making sure everything was being calculated as I expected.
+
+## Results
+
+### Cumulative Population Accessibility
+
+The following chart shows the cumulative share of the German population within a given travel time to their nearest hospital, broken down by hospital level (1 = basic, 2 = advanced, 3 = comprehensive).
 
 ```{=html}
 <div class="panel col-span-2">
@@ -46,7 +80,7 @@ to their nearest hospital, broken down by hospital level (1 = basic, 2 = advance
 </div>
 ```
 
-## Bundesland Analysis
+### Bundesland Analysis
 
 Germany's 16 federal states (*Bundesländer*) reveal substantial disparities in emergency care
 accessibility — driven by a mix of population density, road infrastructure quality, and the
@@ -95,13 +129,13 @@ geographic clustering of comprehensive hospitals.
 </div>
 ```
 
-## Age-Group Access by Hospital Level and Bundesland
+### Age-Group Access by Hospital Level and Bundesland
 
 The chart below compares the share of each age group's population that can reach
 **any hospital** versus a **Level 2 or 3** (advanced or comprehensive care) facility
 within the selected travel-time threshold. Use the *Region* dropdown to view the
 same breakdown for an individual Bundesland, and compare the summary statistics
-underneath to see how median travel time and the underserved share shift between
+underneath to see how median travel time and the under-served share shift between
 hospital categories.
 
 ```{=html}
@@ -122,23 +156,10 @@ hospital categories.
 </div>
 ```
 
-## Example: Interactive Chart with Plotly
+## Discussion
 
-```{python}
-import plotly.express as px
-import pandas as pd
+TODO
 
-df = pd.DataFrame({
-    "Age Group": ["Under 18", "18–29", "30–49", "50–64", "65+"],
-    "Median Travel Time (min)": [18.4, 15.2, 17.8, 19.1, 21.3],
-})
+## Conclusion
 
-fig = px.bar(
-    df,
-    x="Age Group",
-    y="Median Travel Time (min)",
-    title="Median Travel Time to Nearest Emergency Hospital by Age Group",
-    labels={"Median Travel Time (min)": "Median Travel Time (min)"},
-)
-fig.show()
-```
+TODO

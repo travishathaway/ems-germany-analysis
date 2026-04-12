@@ -43,11 +43,13 @@
 
       const layout = {
         title: 'Cumulative Population Accessibility (CDF)',
-        xaxis: { title: 'Travel time to nearest hospital (minutes)', range: [0, 90] },
+        xaxis: { title: 'Travel time to nearest hospital (minutes)', range: [0, 70] },
         yaxis: { title: 'Cumulative population (%)' },
         legend: { title: { text: 'Hospital level' } },
         template: 'plotly_white',
-        font: { family: 'Arial, sans-serif' },
+        font: {
+          family: '"Source Sans 3",Helvetica,sans-serif'
+        },
         margin: { t: 50, b: 80, l: 60, r: 20 },
         shapes: [
           { type: 'line', x0: 15, x1: 15, y0: 0, y1: 100, line: { dash: 'dash', color: 'gray' } },

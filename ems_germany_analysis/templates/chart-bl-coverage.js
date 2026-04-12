@@ -14,9 +14,8 @@
   function _selectStyle() {
     return [
       'font-family:"Source Sans 3",Helvetica,sans-serif',
-      'font-size:0.45em',
-      'color:#586e75',
-      'background:#fdf6e3',
+      'font-size:0.8em',
+      'color: #586e75',
       'border:1px solid #93a1a1',
       'border-radius:4px',
       'padding:2px 20px 2px 7px',
@@ -33,7 +32,7 @@
   function _labelStyle() {
     return [
       'font-family:"Source Sans 3",Helvetica,sans-serif',
-      'font-size:0.45em',
+      'font-size:0.8em',
       'color:#93a1a1',
       'letter-spacing:0.04em',
       'text-transform:uppercase',
@@ -81,7 +80,7 @@
 
       // ── Controls ─────────────────────────────────────────────────────────
       const controls = document.createElement('div');
-      controls.style.cssText = 'margin-bottom:8px;display:flex;align-items:center;gap:14px;justify-content:flex-end;flex-wrap:wrap;';
+      controls.style.cssText = 'margin:10px;display:flex;align-items:center;gap:14px;justify-content:flex-end;flex-wrap:wrap;';
 
       const catLabel = document.createElement('label');
       catLabel.textContent = 'Hospital type:';
@@ -212,26 +211,26 @@
       const stats = this._data.stats || {};
 
       const cardStyle = [
-        'background:#f8f7f4',
-        'border:1px solid #dedad2',
-        'border-radius:6px',
+        //'background: #f8f7f4',
+        //'border:1px solid #dedad2',
+        // 'border-radius:6px',
         'padding:12px 16px',
       ].join(';');
 
       const titleStyle = [
-        'font-family:"Source Sans 3",Helvetica,sans-serif',
-        'font-size:0.75rem',
-        'font-weight:700',
-        'letter-spacing:0.04em',
-        'text-transform:uppercase',
-        'margin-bottom:8px',
+        'font-family: "Source Sans 3",Helvetica,sans-serif',
+        'font-size: 0.75rem',
+        'font-weight: bold',
+        'letter-spacing: 0.04em',
+        'text-transform: uppercase',
+        'margin-bottom: 8px',
       ].join(';');
 
       const metricStyle = [
-        'display:flex',
-        'justify-content:space-between',
-        'align-items:baseline',
-        'margin-bottom:4px',
+        'display: flex',
+        'justify-content: space-between',
+        'align-items: baseline',
+        'margin-bottom: 4px',
       ].join(';');
 
       const labelStyle = [
