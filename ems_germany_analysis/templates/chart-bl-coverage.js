@@ -1,0 +1,283 @@
+(function () {
+  const PLOTLY_JS = 'https://cdn.plot.ly/plotly-3.0.1.min.js';
+
+  const CATEGORY_LABELS = {
+    'any': 'Any Hospital',
+    'l23': 'Level 2 or 3',
+  };
+  const CATEGORY_COLORS = {
+    'any': '#2563a8',
+    'l23': '#c0392b',
+  };
+  const THRESHOLD_LABELS = { '15': '≤ 15 min', '30': '≤ 30 min', '60': '≤ 60 min' };
+
+  function _selectStyle() {
+    return [
+      'font-family:"Source Sans 3",Helvetica,sans-serif',
+      'font-size:0.45em',
+      'color:#586e75',
+      'background:#fdf6e3',
+      'border:1px solid #93a1a1',
+      'border-radius:4px',
+      'padding:2px 20px 2px 7px',
+      'cursor:pointer',
+      'appearance:none',
+      '-webkit-appearance:none',
+      'background-image:url(\'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="6"><polyline points="0,0 5,5 10,0" fill="none" stroke="%2393a1a1" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>\')',
+      'background-repeat:no-repeat',
+      'background-position:right 6px center',
+      'outline:none',
+    ].join(';');
+  }
+
+  function _labelStyle() {
+    return [
+      'font-family:"Source Sans 3",Helvetica,sans-serif',
+      'font-size:0.45em',
+      'color:#93a1a1',
+      'letter-spacing:0.04em',
+      'text-transform:uppercase',
+    ].join(';');
+  }
+
+  class ChartBlCoverage extends HTMLElement {
+    connectedCallback() {
+      this._category  = 'any';
+      this._threshold = '30';
+      this._data      = null;
+      this._loadPlotly();
+    }
+
+    _loadPlotly() {
+      if (window.Plotly) { this._fetchAndRender(); return; }
+      const existing = document.querySelector(`script[src="${PLOTLY_JS}"]`);
+      if (existing) { existing.addEventListener('load', () => this._fetchAndRender()); return; }
+      const s = document.createElement('script');
+      s.src = PLOTLY_JS;
+      s.onload = () => this._fetchAndRender();
+      document.head.appendChild(s);
+    }
+
+    async _fetchAndRender() {
+      const src = this.getAttribute('src');
+      if (!src) return;
+      try {
+        this._data = await fetch(src).then(r => r.json());
+      } catch (e) {
+        this.innerHTML = '<p style="padding:1rem;color:#c0392b;">Failed to load chart data.</p>';
+        return;
+      }
+      this._buildUI();
+      this._renderChart();
+      this._renderStats();
+    }
+
+    _buildUI() {
+      if (this.querySelector('.cbc-wrapper')) return;
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'cbc-wrapper';
+      wrapper.style.cssText = 'display:flex;flex-direction:column;width:100%;';
+
+      // ── Controls ─────────────────────────────────────────────────────────
+      const controls = document.createElement('div');
+      controls.style.cssText = 'margin-bottom:8px;display:flex;align-items:center;gap:14px;justify-content:flex-end;flex-wrap:wrap;';
+
+      const catLabel = document.createElement('label');
+      catLabel.textContent = 'Hospital type:';
+      catLabel.style.cssText = _labelStyle();
+
+      const catSelect = document.createElement('select');
+      catSelect.style.cssText = _selectStyle();
+      Object.entries(CATEGORY_LABELS).forEach(([val, text]) => {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = text;
+        if (val === this._category) opt.selected = true;
+        catSelect.appendChild(opt);
+      });
+      catSelect.addEventListener('change', (e) => {
+        this._category = e.target.value;
+        this._renderChart();
+        this._renderStats();
+      });
+
+      const thrLabel = document.createElement('label');
+      thrLabel.textContent = 'Threshold:';
+      thrLabel.style.cssText = _labelStyle();
+
+      const thrSelect = document.createElement('select');
+      thrSelect.style.cssText = _selectStyle();
+      Object.entries(THRESHOLD_LABELS).forEach(([val, text]) => {
+        const opt = document.createElement('option');
+        opt.value = val;
+        opt.textContent = text;
+        if (val === this._threshold) opt.selected = true;
+        thrSelect.appendChild(opt);
+      });
+      thrSelect.addEventListener('change', (e) => {
+        this._threshold = e.target.value;
+        this._renderChart();
+      });
+
+      controls.append(catLabel, catSelect, thrLabel, thrSelect);
+
+      // ── Chart ─────────────────────────────────────────────────────────────
+      const chartDiv = document.createElement('div');
+      chartDiv.className = 'cbc-chart';
+      chartDiv.style.cssText = 'width:100%;min-height:420px;';
+
+      // ── Stats ─────────────────────────────────────────────────────────────
+      const statsDiv = document.createElement('div');
+      statsDiv.className = 'cbc-stats';
+      statsDiv.style.cssText = [
+        'display:grid',
+        'grid-template-columns:1fr 1fr',
+        'gap:12px',
+        'margin-top:16px',
+        'padding:12px 0 4px',
+        'border-top:1px solid #dedad2',
+      ].join(';');
+
+      wrapper.append(controls, chartDiv, statsDiv);
+      this.appendChild(wrapper);
+    }
+
+    _sortedData() {
+      const vals = this._data[this._category][this._threshold];
+      const states = this._data.states;
+      // Pair states with values, sort ascending (Plotly h-bar shows bottom-to-top)
+      const pairs = states.map((s, i) => [s, vals[i]]);
+      pairs.sort((a, b) => a[1] - b[1]);
+      return {
+        states: pairs.map(p => p[0]),
+        vals:   pairs.map(p => p[1]),
+      };
+    }
+
+    _renderChart() {
+      const chartDiv = this.querySelector('.cbc-chart');
+      if (!chartDiv || !this._data) return;
+
+      const { states, vals } = this._sortedData();
+      const color = CATEGORY_COLORS[this._category];
+
+      const traces = [{
+        type: 'bar',
+        orientation: 'h',
+        x: vals,
+        y: states,
+        text: vals.map(v => v != null ? v.toFixed(1) + '%' : ''),
+        textposition: 'outside',
+        cliponaxis: false,
+        textfont: { size: 11, color: '#586e75' },
+        marker: { color, opacity: 0.82 },
+        hovertemplate: '<b>%{y}</b><br>%{x:.1f}% within threshold<extra></extra>',
+      }];
+
+      const layout = {
+        xaxis: {
+          title: `Population within threshold (%)`,
+          range: [0, 108],
+          ticksuffix: '%',
+          zeroline: false,
+          tickfont: { size: 12, color: '#586e75' },
+        },
+        yaxis: {
+          automargin: true,
+          tickfont: { size: 12, color: '#4a4840' },
+        },
+        template: 'plotly_white',
+        font: {
+          family: "'Source Sans 3', Helvetica, sans-serif",
+          size: 13,
+        },
+        margin: { t: 20, b: 60, l: 180, r: 80 },
+        showlegend: false,
+        height: 520,
+      };
+
+      if (chartDiv._plotlyRendered) {
+        Plotly.react(chartDiv, traces, layout, { displayModeBar: false });
+      } else {
+        Plotly.newPlot(chartDiv, traces, layout, { responsive: true, displayModeBar: false });
+        chartDiv._plotlyRendered = true;
+      }
+    }
+
+    _renderStats() {
+      const statsDiv = this.querySelector('.cbc-stats');
+      if (!statsDiv || !this._data) return;
+
+      const stats = this._data.stats || {};
+
+      const cardStyle = [
+        'background:#f8f7f4',
+        'border:1px solid #dedad2',
+        'border-radius:6px',
+        'padding:12px 16px',
+      ].join(';');
+
+      const titleStyle = [
+        'font-family:"Source Sans 3",Helvetica,sans-serif',
+        'font-size:0.75rem',
+        'font-weight:700',
+        'letter-spacing:0.04em',
+        'text-transform:uppercase',
+        'margin-bottom:8px',
+      ].join(';');
+
+      const metricStyle = [
+        'display:flex',
+        'justify-content:space-between',
+        'align-items:baseline',
+        'margin-bottom:4px',
+      ].join(';');
+
+      const labelStyle = [
+        'font-family:"Source Sans 3",Helvetica,sans-serif',
+        'font-size:0.8rem',
+        'color:#4a4840',
+      ].join(';');
+
+      const valueStyle = (color) => [
+        'font-family:"Source Serif 4",Georgia,serif',
+        'font-size:1.1rem',
+        'font-weight:700',
+        `color:${color}`,
+      ].join(';');
+
+      const fmt = (v, suffix) => v != null ? `${v.toFixed(1)}${suffix}` : '—';
+
+      const anyS = stats.any || {};
+      const l23S = stats.l23 || {};
+
+      statsDiv.innerHTML = `
+        <div style="${cardStyle}">
+          <div style="${titleStyle};color:#2563a8;">Any Hospital · Germany</div>
+          <div style="${metricStyle}">
+            <span style="${labelStyle}">Median travel time</span>
+            <span style="${valueStyle('#2563a8')}">${fmt(anyS.median, ' min')}</span>
+          </div>
+          <div style="${metricStyle}">
+            <span style="${labelStyle}">Population &gt; 30 min</span>
+            <span style="${valueStyle('#2563a8')}">${fmt(anyS.underserved_pct, '%')}</span>
+          </div>
+        </div>
+        <div style="${cardStyle}">
+          <div style="${titleStyle};color:#c0392b;">Level 2 or 3 · Germany</div>
+          <div style="${metricStyle}">
+            <span style="${labelStyle}">Median travel time</span>
+            <span style="${valueStyle('#c0392b')}">${fmt(l23S.median, ' min')}</span>
+          </div>
+          <div style="${metricStyle}">
+            <span style="${labelStyle}">Population &gt; 30 min</span>
+            <span style="${valueStyle('#c0392b')}">${fmt(l23S.underserved_pct, '%')}</span>
+          </div>
+        </div>
+      `;
+    }
+  }
+
+  customElements.define('chart-bl-coverage', ChartBlCoverage);
+})();

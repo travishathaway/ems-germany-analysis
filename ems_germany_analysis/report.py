@@ -187,6 +187,107 @@ GROUP BY state, hospital_level
 ORDER BY state, hospital_level;
 """
 
+# Per-state, per-age-group coverage for any hospital and Level 2-or-3
+SQL_STATE_AGE_LEVEL_COVERAGE = """
+WITH state_geoms AS (
+    SELECT name, ST_Union(geom) AS geom
+    FROM osm_germany.place_polygon_nested
+    WHERE name = ANY(%(state_names)s)
+    GROUP BY name
+),
+level_times AS (
+    SELECT
+        r.gitter_id,
+        CAST(h.notfall AS float)::int AS hospital_level,
+        MIN(r.total_cost_seconds)     AS min_secs
+    FROM ems_germany_analysis.{cost_table} r
+    JOIN ems_germany_analysis.notfall_krankenhauser_geocoded h ON r.hospital_id = h.id
+    WHERE r.total_cost_seconds IS NOT NULL
+    GROUP BY r.gitter_id, CAST(h.notfall AS float)::int
+),
+cell_times AS (
+    SELECT
+        gitter_id,
+        MIN(min_secs)                                                  AS min_secs_any,
+        LEAST(
+            MIN(CASE WHEN hospital_level = 2 THEN min_secs END),
+            MIN(CASE WHEN hospital_level = 3 THEN min_secs END)
+        )                                                              AS min_secs_l23
+    FROM level_times
+    GROUP BY gitter_id
+),
+cell_state AS (
+    SELECT
+        ct.*,
+        c.insgesamt_bevoelkerung AS population,
+        c.a65undaelter           AS pop_65plus,
+        c.unter18                AS pop_under18,
+        c.a18bis29               AS pop_18to29,
+        c.a30bis49               AS pop_30to49,
+        c.a50bis64               AS pop_50to64,
+        s.name                   AS state
+    FROM cell_times ct
+    JOIN zensus.alter_in_5_altersklassen_{resolution} c ON c.gitter_id_{resolution} = ct.gitter_id
+    JOIN state_geoms s ON ST_Within(c.geom, s.geom)
+    WHERE c.insgesamt_bevoelkerung > 0
+)
+SELECT
+    state,
+    SUM(pop_under18)                                                                                 AS total_pop_0_17,
+    SUM(pop_18to29)                                                                                  AS total_pop_18_29,
+    SUM(pop_30to49)                                                                                  AS total_pop_30_49,
+    SUM(pop_50to64)                                                                                  AS total_pop_50_64,
+    SUM(pop_65plus)                                                                                  AS total_pop_65plus,
+    -- Median travel times
+    ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY min_secs_any))::numeric / 60, 1)             AS median_any,
+    ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY min_secs_l23))::numeric / 60, 1)             AS median_l23,
+    -- pct population > 30 min (underserved proxy)
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any > 1800 THEN population ELSE 0 END) / NULLIF(SUM(population), 0), 1)  AS u30_any,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 > 1800 THEN population ELSE 0 END) / NULLIF(SUM(population), 0), 1)  AS u30_l23,
+    -- Any hospital coverage by age group x threshold
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <=  900 THEN pop_under18 ELSE 0 END) / NULLIF(SUM(pop_under18), 0), 1) AS any_p15_0_17,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 1800 THEN pop_under18 ELSE 0 END) / NULLIF(SUM(pop_under18), 0), 1) AS any_p30_0_17,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 3600 THEN pop_under18 ELSE 0 END) / NULLIF(SUM(pop_under18), 0), 1) AS any_p60_0_17,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <=  900 THEN pop_18to29  ELSE 0 END) / NULLIF(SUM(pop_18to29),  0), 1) AS any_p15_18_29,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 1800 THEN pop_18to29  ELSE 0 END) / NULLIF(SUM(pop_18to29),  0), 1) AS any_p30_18_29,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 3600 THEN pop_18to29  ELSE 0 END) / NULLIF(SUM(pop_18to29),  0), 1) AS any_p60_18_29,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <=  900 THEN pop_30to49  ELSE 0 END) / NULLIF(SUM(pop_30to49),  0), 1) AS any_p15_30_49,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 1800 THEN pop_30to49  ELSE 0 END) / NULLIF(SUM(pop_30to49),  0), 1) AS any_p30_30_49,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 3600 THEN pop_30to49  ELSE 0 END) / NULLIF(SUM(pop_30to49),  0), 1) AS any_p60_30_49,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <=  900 THEN pop_50to64  ELSE 0 END) / NULLIF(SUM(pop_50to64),  0), 1) AS any_p15_50_64,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 1800 THEN pop_50to64  ELSE 0 END) / NULLIF(SUM(pop_50to64),  0), 1) AS any_p30_50_64,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 3600 THEN pop_50to64  ELSE 0 END) / NULLIF(SUM(pop_50to64),  0), 1) AS any_p60_50_64,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <=  900 THEN pop_65plus  ELSE 0 END) / NULLIF(SUM(pop_65plus),  0), 1) AS any_p15_65plus,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 1800 THEN pop_65plus  ELSE 0 END) / NULLIF(SUM(pop_65plus),  0), 1) AS any_p30_65plus,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 3600 THEN pop_65plus  ELSE 0 END) / NULLIF(SUM(pop_65plus),  0), 1) AS any_p60_65plus,
+    -- Total population coverage by threshold (both categories)
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <=  900 THEN population ELSE 0 END) / NULLIF(SUM(population), 0), 1) AS any_p15_total,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 1800 THEN population ELSE 0 END) / NULLIF(SUM(population), 0), 1) AS any_p30_total,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_any <= 3600 THEN population ELSE 0 END) / NULLIF(SUM(population), 0), 1) AS any_p60_total,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <=  900 THEN population ELSE 0 END) / NULLIF(SUM(population), 0), 1) AS l23_p15_total,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 1800 THEN population ELSE 0 END) / NULLIF(SUM(population), 0), 1) AS l23_p30_total,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 3600 THEN population ELSE 0 END) / NULLIF(SUM(population), 0), 1) AS l23_p60_total,
+    -- Level 2-or-3 coverage by age group x threshold
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <=  900 THEN pop_under18 ELSE 0 END) / NULLIF(SUM(pop_under18), 0), 1) AS l23_p15_0_17,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 1800 THEN pop_under18 ELSE 0 END) / NULLIF(SUM(pop_under18), 0), 1) AS l23_p30_0_17,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 3600 THEN pop_under18 ELSE 0 END) / NULLIF(SUM(pop_under18), 0), 1) AS l23_p60_0_17,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <=  900 THEN pop_18to29  ELSE 0 END) / NULLIF(SUM(pop_18to29),  0), 1) AS l23_p15_18_29,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 1800 THEN pop_18to29  ELSE 0 END) / NULLIF(SUM(pop_18to29),  0), 1) AS l23_p30_18_29,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 3600 THEN pop_18to29  ELSE 0 END) / NULLIF(SUM(pop_18to29),  0), 1) AS l23_p60_18_29,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <=  900 THEN pop_30to49  ELSE 0 END) / NULLIF(SUM(pop_30to49),  0), 1) AS l23_p15_30_49,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 1800 THEN pop_30to49  ELSE 0 END) / NULLIF(SUM(pop_30to49),  0), 1) AS l23_p30_30_49,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 3600 THEN pop_30to49  ELSE 0 END) / NULLIF(SUM(pop_30to49),  0), 1) AS l23_p60_30_49,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <=  900 THEN pop_50to64  ELSE 0 END) / NULLIF(SUM(pop_50to64),  0), 1) AS l23_p15_50_64,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 1800 THEN pop_50to64  ELSE 0 END) / NULLIF(SUM(pop_50to64),  0), 1) AS l23_p30_50_64,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 3600 THEN pop_50to64  ELSE 0 END) / NULLIF(SUM(pop_50to64),  0), 1) AS l23_p60_50_64,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <=  900 THEN pop_65plus  ELSE 0 END) / NULLIF(SUM(pop_65plus),  0), 1) AS l23_p15_65plus,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 1800 THEN pop_65plus  ELSE 0 END) / NULLIF(SUM(pop_65plus),  0), 1) AS l23_p30_65plus,
+    ROUND(100.0 * SUM(CASE WHEN min_secs_l23 <= 3600 THEN pop_65plus  ELSE 0 END) / NULLIF(SUM(pop_65plus),  0), 1) AS l23_p60_65plus
+FROM cell_state
+GROUP BY state
+ORDER BY state;
+"""
+
 # Per-state, per-age-group mean travel time to nearest hospital (any level)
 SQL_STATE_AGE_BREAKDOWN = """
 WITH state_geoms AS (
@@ -594,6 +695,149 @@ def chart_combined_heat(df_state_age: pd.DataFrame) -> dict | None:
     return {"states": states, "age_groups": age_labels, "z": z}
 
 
+def chart_age_level_bl(df_cell: pd.DataFrame, df_state_age_level: pd.DataFrame) -> dict:
+    """Grouped bar: % of each age group within threshold for Any hospital vs Level 2/3.
+
+    Returns one dataset per region (All Germany + each Bundesland) for use with
+    the chart-age-level-bl web component, which provides a region dropdown and
+    threshold selector.
+    """
+    thresholds = [("15", 900), ("30", 1800), ("60", 3600)]
+    age_groups = [
+        ("0–17",  "pop_under18"),
+        ("18–29", "pop_18to29"),
+        ("30–49", "pop_30to49"),
+        ("50–64", "pop_50to64"),
+        ("65+",   "pop_65plus"),
+    ]
+
+    def _cov(df: pd.DataFrame, col: str, secs: int, pop: str) -> float:
+        sub = df.dropna(subset=[col])
+        total = sub[pop].sum()
+        if total == 0:
+            return 0.0
+        return round(float(100 * sub.loc[sub[col] <= secs, pop].sum() / total), 1)
+
+    def _stats(df: pd.DataFrame, col: str) -> dict:
+        sub = df.dropna(subset=[col]).copy()
+        total = sub["population"].sum()
+        if total == 0:
+            return {"median": None, "underserved_pct": None}
+        median = float(np.average(sub[col] / 60, weights=sub["population"].clip(lower=0)))
+        u30 = round(float(100 * sub.loc[sub[col] > 1800, "population"].sum() / total), 1)
+        return {"median": round(median, 1), "underserved_pct": u30}
+
+    nat = df_cell.copy()
+    nat["min_secs_l23"] = nat[["min_secs_l2", "min_secs_l3"]].min(axis=1)
+
+    def _build_region_from_df(df: pd.DataFrame) -> dict:
+        entry: dict = {}
+        df = df.copy()
+        df["min_secs_l23"] = df[["min_secs_l2", "min_secs_l3"]].min(axis=1)
+        for thr_label, thr_secs in thresholds:
+            entry[thr_label] = {
+                "any": [_cov(df, "min_secs_any", thr_secs, ag[1]) for ag in age_groups],
+                "l23": [_cov(df, "min_secs_l23", thr_secs, ag[1]) for ag in age_groups],
+            }
+        entry["stats"] = {
+            "any": _stats(df, "min_secs_any"),
+            "l23": _stats(df, "min_secs_l23"),
+        }
+        return entry
+
+    regions: dict[str, dict] = {"All Germany": _build_region_from_df(nat)}
+
+    # Per-state values come from the SQL result (wide-format row per state)
+    if not df_state_age_level.empty:
+        col_map = {
+            "0–17":  ("0_17",   "total_pop_0_17"),
+            "18–29": ("18_29",  "total_pop_18_29"),
+            "30–49": ("30_49",  "total_pop_30_49"),
+            "50–64": ("50_64",  "total_pop_50_64"),
+            "65+":   ("65plus", "total_pop_65plus"),
+        }
+        thr_map = {"15": "p15", "30": "p30", "60": "p60"}
+
+        cols = df_state_age_level.columns
+        for _, row in df_state_age_level.iterrows():
+            state = row["state"]
+            entry: dict = {}
+            for thr_label, thr_key in thr_map.items():
+                any_vals, l23_vals = [], []
+                for ag_label, (ag_suffix, _) in col_map.items():
+                    any_col = f"any_{thr_key}_{ag_suffix}"
+                    l23_col = f"l23_{thr_key}_{ag_suffix}"
+                    any_vals.append(float(row[any_col]) if any_col in cols and pd.notna(row[any_col]) else None)
+                    l23_vals.append(float(row[l23_col]) if l23_col in cols and pd.notna(row[l23_col]) else None)
+                entry[thr_label] = {"any": any_vals, "l23": l23_vals}
+
+            entry["stats"] = {
+                "any": {
+                    "median": float(row["median_any"]) if "median_any" in cols and pd.notna(row["median_any"]) else None,
+                    "underserved_pct": float(row["u30_any"]) if "u30_any" in cols and pd.notna(row["u30_any"]) else None,
+                },
+                "l23": {
+                    "median": float(row["median_l23"]) if "median_l23" in cols and pd.notna(row["median_l23"]) else None,
+                    "underserved_pct": float(row["u30_l23"]) if "u30_l23" in cols and pd.notna(row["u30_l23"]) else None,
+                },
+            }
+            regions[state] = entry
+
+    return {
+        "age_groups": [ag[0] for ag in age_groups],
+        "data": regions,
+    }
+
+
+def chart_bl_coverage(df_cell: pd.DataFrame, df_state_age_level: pd.DataFrame) -> dict:
+    """Horizontal bar: % population within threshold per Bundesland for any vs Level 2/3.
+
+    Returns state-sorted arrays for each category × threshold combination, plus
+    national summary stats, for use with the chart-bl-coverage web component.
+    """
+    thresholds = [("15", 900), ("30", 1800), ("60", 3600)]
+
+    # Build a working copy with the derived l23 column up front so all helpers can use it.
+    nat = df_cell.copy()
+    nat["min_secs_l23"] = nat[["min_secs_l2", "min_secs_l3"]].min(axis=1)
+
+    def _nat_stats(col: str) -> dict:
+        sub = nat.dropna(subset=[col]).copy()
+        total = sub["population"].sum()
+        if total == 0:
+            return {"median": None, "underserved_pct": None}
+        median = float(np.average(sub[col] / 60, weights=sub["population"].clip(lower=0)))
+        u30 = round(float(100 * sub.loc[sub[col] > 1800, "population"].sum() / total), 1)
+        return {"median": round(median, 1), "underserved_pct": u30}
+
+    # National summary stats
+    nat_stats = {
+        "any": _nat_stats("min_secs_any"),
+        "l23": _nat_stats("min_secs_l23"),
+    }
+
+    states: list[str] = []
+    any_vals:  dict[str, list] = {"15": [], "30": [], "60": []}
+    l23_vals:  dict[str, list] = {"15": [], "30": [], "60": []}
+
+    if not df_state_age_level.empty:
+        cols = df_state_age_level.columns
+        for _, row in df_state_age_level.sort_values("state").iterrows():
+            states.append(row["state"])
+            for thr_label, _ in thresholds:
+                any_col = f"any_p{thr_label}_total"
+                l23_col = f"l23_p{thr_label}_total"
+                any_vals[thr_label].append(float(row[any_col]) if any_col in cols and pd.notna(row[any_col]) else None)
+                l23_vals[thr_label].append(float(row[l23_col]) if l23_col in cols and pd.notna(row[l23_col]) else None)
+
+    return {
+        "states": states,
+        "any": any_vals,
+        "l23": l23_vals,
+        "stats": nat_stats,
+    }
+
+
 def chart_sm_age(df_state_age: pd.DataFrame, age_col: str, label: str) -> dict | None:
     """Small multiple: horizontal bar of mean travel time by Bundesland for one age group."""
     if df_state_age.empty or age_col not in df_state_age.columns:
@@ -871,10 +1115,11 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
 
     cache_dir = _cache_dir()
     cost_table = f"census_hospital_route_from_census_{resolution}"
-    sql_summary    = SQL_SUMMARY.format(cost_table=cost_table)
-    sql_per_cell   = SQL_PER_CELL.format(cost_table=cost_table, resolution=resolution)
-    sql_states     = SQL_STATES.format(cost_table=cost_table, resolution=resolution)
-    sql_state_age  = SQL_STATE_AGE_BREAKDOWN.format(cost_table=cost_table, resolution=resolution)
+    sql_summary          = SQL_SUMMARY.format(cost_table=cost_table)
+    sql_per_cell         = SQL_PER_CELL.format(cost_table=cost_table, resolution=resolution)
+    sql_states           = SQL_STATES.format(cost_table=cost_table, resolution=resolution)
+    sql_state_age        = SQL_STATE_AGE_BREAKDOWN.format(cost_table=cost_table, resolution=resolution)
+    sql_state_age_level  = SQL_STATE_AGE_LEVEL_COVERAGE.format(cost_table=cost_table, resolution=resolution)
 
     click.echo("Connecting to database…")
     try:
@@ -913,8 +1158,9 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
         )
 
         if skip_states:
-            df_states    = pd.DataFrame()
-            df_state_age = pd.DataFrame()
+            df_states          = pd.DataFrame()
+            df_state_age       = pd.DataFrame()
+            df_state_age_level = pd.DataFrame()
             click.echo("Skipping state-level analysis (--skip-states).")
         else:
             click.echo("Fetching federal state breakdown (this may take a moment)…")
@@ -942,6 +1188,19 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
             except psycopg.Error as e:
                 click.echo(f"  State × age query failed ({e}); skipping.", err=True)
                 df_state_age = pd.DataFrame()
+
+            click.echo("Fetching state × age-group × level coverage…")
+            try:
+                df_state_age_level = _fetch_cached(
+                    conn, sql_state_age_level,
+                    cache_dir / f"{cost_table}_state_age_level.pkl",
+                    use_cache,
+                    params={"state_names": GERMAN_STATES},
+                )
+                click.echo(f"  → {len(df_state_age_level):,} state rows")
+            except psycopg.Error as e:
+                click.echo(f"  State × age × level query failed ({e}); skipping.", err=True)
+                df_state_age_level = pd.DataFrame()
 
     out_dir = Path(output)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -994,6 +1253,8 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
         "chart-sm-30-49.json":     chart_sm_age(df_state_age, "mean_travel_30_49", "30–49"),
         "chart-sm-50-64.json":     chart_sm_age(df_state_age, "mean_travel_50_64", "50–64"),
         "chart-sm-65plus.json":    chart_sm_age(df_state_age, "mean_travel_65plus", "65+"),
+        "chart-age-level-bl.json": chart_age_level_bl(df_cell, df_state_age_level),
+        "chart-bl-coverage.json":  chart_bl_coverage(df_cell, df_state_age_level),
     }
     for filename, data in chart_data.items():
         if data is not None:
@@ -1032,6 +1293,8 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
         "chart-bl-pct.js",
         "chart-combined-heat.js",
         "chart-sm-age.js",
+        "chart-age-level-bl.js",
+        "chart-bl-coverage.js",
     ]
     for js_file in component_files:
         text = pkg.joinpath(f"templates/{js_file}").read_text(encoding="utf-8")

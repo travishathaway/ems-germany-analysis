@@ -85,16 +85,41 @@ geographic clustering of comprehensive hospitals.
 <div class="panel">
   <div class="panel__header">
     <div>
-      <div class="panel__title">Population &gt; 30 min from Emergency Care</div>
-      <div class="panel__subtitle">Share (%) by Bundesland · Level 3 hospitals</div>
+      <div class="panel__title">Population Coverage by Bundesland</div>
+      <div class="panel__subtitle">Share (%) within threshold · Any Hospital or Level 2 or 3</div>
     </div>
   </div>
   <div class="panel__body">
-    <chart-bl-pct src="chart-bl-pct.json" style="display:block;min-height:300px;"></chart-bl-pct>
+    <chart-bl-coverage src="chart-bl-coverage.json" style="display:block;min-height:420px;"></chart-bl-coverage>
   </div>
 </div>
 ```
 
+## Age-Group Access by Hospital Level and Bundesland
+
+The chart below compares the share of each age group's population that can reach
+**any hospital** versus a **Level 2 or 3** (advanced or comprehensive care) facility
+within the selected travel-time threshold. Use the *Region* dropdown to view the
+same breakdown for an individual Bundesland, and compare the summary statistics
+underneath to see how median travel time and the underserved share shift between
+hospital categories.
+
+```{=html}
+<div class="panel col-span-2">
+  <div class="panel__header">
+    <div>
+      <div class="panel__title">Age-Group Coverage: Any Hospital vs. Level 2 or 3</div>
+      <div class="panel__subtitle">Share of age group within threshold · All Germany or by Bundesland</div>
+    </div>
+  </div>
+  <div class="panel__body">
+    <chart-age-level-bl src="chart-age-level-bl.json" style="display:block;min-height:360px;"></chart-age-level-bl>
+  </div>
+  <div class="footnote">
+    Population weights from Zensus 2022. Travel times via OpenRouteService.
+    Level 2 or 3 = nearest hospital that is Advanced or Comprehensive care.
+  </div>
+</div>
 ```
 
 ## Example: Interactive Chart with Plotly
