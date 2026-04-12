@@ -7,6 +7,7 @@ an interactive map (MapLibre GL JS), and PMTiles hexagon data files.
 import importlib.resources
 import json
 import pickle
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,10 @@ import psycopg
 
 from .constants import APP_NAME
 from .db import create_hex_tables_sync
+
+# full_report.qmd and bibliography.bib live at the project root
+_FULL_REPORT_QMD = Path(__file__).parent.parent / "full_report.qmd"
+_BIBLIOGRAPHY_BIB = Path(__file__).parent.parent / "bibliography.bib"
 
 # ---------------------------------------------------------------------------
 # SQL queries
@@ -745,6 +750,47 @@ def build_hospitals_geojson(df_hospitals: pd.DataFrame) -> dict:
 # HTML assembly
 # ---------------------------------------------------------------------------
 
+def _render_quarto_report(out_dir: Path) -> str:
+    """Render full_report.qmd with quarto and return the extracted <main> body HTML.
+
+    Any JSON files written by Python cells during rendering are copied to out_dir so
+    the browser-side web components can fetch them at runtime.
+    """
+    if not _FULL_REPORT_QMD.exists():
+        click.echo(f"  → {_FULL_REPORT_QMD.name} not found, skipping full report.", err=True)
+        return ""
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        shutil.copy(_FULL_REPORT_QMD, tmp_path / "full_report.qmd")
+        if _BIBLIOGRAPHY_BIB.exists():
+            shutil.copy(_BIBLIOGRAPHY_BIB, tmp_path / "bibliography.bib")
+
+        result = subprocess.run(
+            ["quarto", "render", "full_report.qmd", "--to", "html", "--no-cache"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            click.echo(f"  quarto render failed:\n{result.stderr}", err=True)
+            return "<p>Full report rendering failed.</p>"
+
+        rendered_path = tmp_path / "full_report.html"
+        if not rendered_path.exists():
+            click.echo("  quarto did not produce full_report.html", err=True)
+            return ""
+
+        # Copy any JSON files produced by Python cells into the output directory so
+        # the browser-side web components can fetch them.
+        for json_file in tmp_path.glob("*.json"):
+            shutil.copy(json_file, out_dir / json_file.name)
+
+        html = rendered_path.read_text(encoding="utf-8")
+
+    match = re.search(r'<main\b[^>]*>(.*?)</main>', html, re.DOTALL | re.IGNORECASE)
+    return match.group(1).strip() if match else html
+
 def _compute_kpis(df_cell: pd.DataFrame, cols: list[str]) -> dict:
     """Compute summary KPIs for the effective travel time = min across cols."""
     sub = df_cell.copy()
@@ -787,6 +833,7 @@ def render_report(
     hospital_count: int,
     data_badge: str,
     stats_json: str = "{}",
+    full_report_html: str = "",
 ) -> str:
     """Render the report HTML by loading the template and substituting KPI placeholders."""
     pkg = importlib.resources.files("ems_germany_analysis")
@@ -802,6 +849,7 @@ def render_report(
         .replace("<!-- INSERT_HOSPITAL_COUNT -->",   f"{hospital_count:,}")
         .replace("<!-- INSERT_DATA_BADGE -->",       data_badge)
         .replace("<!-- INSERT_STATS_JSON -->",       stats_json)
+        .replace("<!-- INSERT_FULL_REPORT -->",      full_report_html)
     )
 
 
@@ -814,6 +862,11 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
     if shutil.which("tippecanoe") is None:
         click.echo("Error: tippecanoe is not installed or not in PATH.", err=True)
         click.echo("Install tippecanoe: https://github.com/felt/tippecanoe", err=True)
+        sys.exit(1)
+
+    if shutil.which("quarto") is None:
+        click.echo("Error: quarto is not installed or not in PATH.", err=True)
+        click.echo("Install quarto: https://quarto.org", err=True)
         sys.exit(1)
 
     cache_dir = _cache_dir()
@@ -927,6 +980,7 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
 
     click.echo("Building charts…")
     chart_data: dict[str, dict | None] = {
+        "chart-cdf.json":          chart_cdf(df_cell),
         "chart-sidebar-hist.json": chart_sidebar_hist(df_cell),
         "chart-age-box.json":      chart_age_box(df_cell),
         "chart-age-cdf.json":      chart_age_cdf(df_cell),
@@ -945,6 +999,9 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
         if data is not None:
             (out_dir / filename).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
+    click.echo("Rendering full report with quarto…")
+    full_report_html = _render_quarto_report(out_dir)
+
     click.echo("Assembling HTML report…")
     stats_by_selection = compute_stats_by_selection(df_cell)
     html = render_report(
@@ -957,6 +1014,7 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
         hospital_count=len(df_hospitals),
         data_badge=f"{resolution} resolution",
         stats_json=json.dumps(stats_by_selection),
+        full_report_html=full_report_html,
     )
     index_path = out_dir / "index.html"
     index_path.write_text(html, encoding="utf-8")

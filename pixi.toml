@@ -19,6 +19,8 @@ platformdirs = ">=4.9.4"
 scipy = ">=1.17.1"
 postgresql = ">=18.3,<19"
 postgis = ">=3.6.2,<4"
+quarto = ">=1.8.27,<2"
+jupyter = ">=1.1.1,<2"
 
 [pypi-dependencies]
 ems-germany-analysis = { path = ".", editable = true }

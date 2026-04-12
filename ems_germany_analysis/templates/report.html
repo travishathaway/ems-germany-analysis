@@ -7,6 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..900;1,8..60,300..900&family=Source+Code+Pro:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
   <style>
     /* ─── Design Tokens ────────────────────────────────────────── */
     :root {
@@ -47,89 +48,44 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    /* ─── Top Nav ──────────────────────────────────────────────── */
-    .topnav {
-      position: sticky;
-      top: 0;
-      z-index: 100;
+    /* ─── Top Nav (Bootstrap overrides) ───────────────────────── */
+    #topnav {
       height: var(--nav-h);
       background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      padding: 0 2rem;
-      gap: 2rem;
+      border-color: var(--border) !important;
+      z-index: 100;
     }
-
-    .topnav__brand {
-      display: flex;
-      flex-direction: column;
+    #topnav .navbar-brand {
+      font-family: var(--ff-serif);
       line-height: 1.1;
-      text-decoration: none;
-      color: inherit;
+      color: var(--ink);
+      padding: 0;
       flex-shrink: 0;
     }
-    .topnav__brand-title {
+    #topnav .navbar-brand .brand-title {
       font-size: 0.95rem;
       font-weight: 700;
       letter-spacing: -0.01em;
-      color: var(--ink);
     }
-    .topnav__brand-sub {
+    #topnav .navbar-brand .brand-sub {
       font-size: 0.7rem;
       font-weight: 400;
       color: var(--ink-muted);
       font-style: italic;
     }
-
-    .topnav__divider {
-      width: 1px;
-      height: 28px;
-      background: var(--border);
-      flex-shrink: 0;
-    }
-
-    .topnav__pages {
-      display: flex;
-      gap: 0.25rem;
-      list-style: none;
-      flex: 1;
-    }
-    .topnav__pages a {
-      display: flex;
-      align-items: center;
-      gap: 0.4rem;
-      padding: 0.3rem 0.75rem;
-      border-radius: var(--radius);
-      text-decoration: none;
+    #topnav .vr { height: 28px; color: var(--border); }
+    #topnav .nav-link {
       font-size: 0.82rem;
       font-weight: 500;
       color: var(--ink-mid);
-      transition: background 0.15s, color 0.15s;
+      border-radius: var(--radius);
+      padding: 0.3rem 0.75rem;
       letter-spacing: 0.01em;
+      transition: background 0.15s, color 0.15s;
     }
-    .topnav__pages a:hover {
-      background: var(--surface-alt);
-      color: var(--ink);
-    }
-    .topnav__pages a.active {
-      background: var(--accent-light);
-      color: var(--accent);
-    }
-    .topnav__pages a .icon {
-      font-size: 0.95rem;
-      opacity: 0.75;
-    }
-
-    .topnav__meta {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.72rem;
-      color: var(--ink-muted);
-      font-style: italic;
-    }
-    .topnav__meta-badge {
+    #topnav .nav-link:hover { background: var(--surface-alt); color: var(--ink); }
+    #topnav .nav-link.active { background: var(--accent-light); color: var(--accent); }
+    .meta-badge {
       background: var(--surface-alt);
       border: 1px solid var(--border);
       border-radius: 999px;
@@ -452,6 +408,7 @@
     #maplibre-container {
       height: 100vh;
       margin-right: 300px;
+      margin-left: 335px;
     }
     #map-controls {
       position: absolute;
@@ -540,32 +497,81 @@
       accent-color: var(--accent, #2563a8);
       cursor: pointer;
     }
+
+    /* ─── Full Report (Quarto content) ────────────────────────── */
+    .full-report-body {
+      padding: 1.75rem 2.5rem;
+    }
+    .full-report-body #title-block-header { display: none; }
+    .full-report-body section.level2 { margin-bottom: 2.5rem; }
+    .full-report-body section.level2:last-child { margin-bottom: 0; }
+    .full-report-body h2 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      margin: 0 0 0.75rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border-light);
+    }
+    .full-report-body h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--ink);
+      margin: 1.25rem 0 0.4rem;
+    }
+    .full-report-body p {
+      font-size: 1.25rem;
+      line-height: 1.7;
+      color: var(--ink);
+      margin-bottom: 0.9rem;
+      max-width: 80ch;
+      font-weight: inherit;
+    }
+    .full-report-body a.anchor-section-link { display: none; }
+    .full-report-body .anchored::after { display: none; }
+    #page-report {
+      background-color: var(--surface, #ffffff);
+    }
+    #page-report .page-header {
+      width: 100ch;
+      margin-right: auto;
+      margin-left: auto;
+      border-bottom: none;
+    }
+    #page-report .full-report-body {
+      max-width: 100ch;
+      margin-right: auto;
+      margin-left: auto;
+    }
   </style>
 </head>
 <body>
 
 <!-- ═══════════════════════════ TOP NAV ═══════════════════════════ -->
-<nav class="topnav">
-  <a class="topnav__brand" href="#">
-    <span class="topnav__brand-title">Hospital Accessibility in Germany</span>
-    <span class="topnav__brand-sub">A study on emergency service proximity</span>
-  </a>
-  <div class="topnav__divider"></div>
-  <ul class="topnav__pages">
-    <li>
-      <a href="#" class="active" onclick="showPage('map', this); return false;">
-        <span class="icon">🗺</span> Accessibility Map
-      </a>
-    </li>
-    <li>
-      <a href="#" onclick="showPage('charts', this); return false;">
-        <span class="icon">📊</span> Age &amp; Bundesland
-      </a>
-    </li>
-  </ul>
-  <div class="topnav__meta">
-    <span>n = <!-- INSERT_CENSUS_COUNT --> census cells</span>
-    <span class="topnav__meta-badge"><!-- INSERT_DATA_BADGE --></span>
+<nav class="navbar sticky-top border-bottom" id="topnav">
+  <div class="d-flex align-items-center w-100 px-4 gap-3">
+    <a class="navbar-brand d-flex flex-column" href="#">
+      <span class="brand-title">Hospital Accessibility in Germany</span>
+      <span class="brand-sub">A study on emergency service proximity</span>
+    </a>
+    <div class="vr"></div>
+    <ul class="navbar-nav flex-row gap-1 flex-grow-1">
+      <li class="nav-item">
+        <a href="#map" class="nav-link active" onclick="showPage('map', this); return false;">
+          🗺 Accessibility Map
+        </a>
+      </li>
+      <li class="nav-item">
+        <a href="#report" class="nav-link" onclick="showPage('report', this); return false;">
+          📄 Full Report
+        </a>
+      </li>
+    </ul>
+    <div class="d-flex align-items-center gap-2 fst-italic" style="font-size: 0.72rem; color: var(--ink-muted);">
+      <span>n = <!-- INSERT_CENSUS_COUNT --> census cells</span>
+      <span class="meta-badge"><!-- INSERT_DATA_BADGE --></span>
+    </div>
   </div>
 </nav>
 
@@ -579,7 +585,7 @@
     <div id="map-controls">
       <div class="mc-section">
         <p class="page-header__eyebrow">Section 1 of 2 · Spatial Analysis</p>
-        <h1 class="page-header__title">Emergency Hospital Accessibility</h1>
+        <h1 class="page-header__title">Emergency Medical Service Accessibility</h1>
         <p class="page-header__desc">
           Estimated travel time from each census centroid to the nearest hospital offering
           emergency medical services (Notaufnahme). Modeled by road network under
@@ -698,212 +704,21 @@
 </div><!-- /page-map -->
 
 
-<!-- ═══════════════════════════ PAGE 2: CHARTS ════════════════════════ -->
-<div class="page" id="page-charts">
+<!-- ═══════════════════════════ PAGE 2: FULL REPORT ═════════════ -->
+<div class="container page" id="page-report">
 
   <!-- Header -->
   <div class="page-header">
-    <p class="page-header__eyebrow">Section 2 of 2 · Statistical Breakdown</p>
-    <h1 class="page-header__title">Age Group &amp; Bundesland Comparison</h1>
-    <p class="page-header__desc">
-      How does travel time to emergency care vary across age groups and Germany's
-      16 Bundesländer? Toggle the age overlay to examine the intersection of
-      geography and demography.
-    </p>
+    <p class="page-header__eyebrow">Section 2 of 2 · Analysis Report</p>
+    <h1 class="page-header__title">Emergency Medical Service Accessibility in Germany</h1>
   </div>
 
-  <!-- Tab bar -->
-  <div class="tab-bar">
-    <button class="tab-btn active" onclick="showTab('age', this)">Age Groups</button>
-    <button class="tab-btn" onclick="showTab('bundesland', this)">Bundesland</button>
-    <button class="tab-btn" onclick="showTab('combined', this)">Combined View</button>
+  <!-- Quarto-rendered report content -->
+  <div class="full-report-body">
+    <!-- INSERT_FULL_REPORT -->
   </div>
 
-  <!-- ── Tab 1: Age Groups ── -->
-  <div class="tab-pane active" id="tab-age">
-    <div class="content-area">
-      <div class="grid-2">
-
-        <!-- Box plot — box/violin toggle rendered inside component -->
-        <div class="panel col-span-2">
-          <div class="panel__header">
-            <div>
-              <div class="panel__title">Travel Time Distribution by Age Group</div>
-              <div class="panel__subtitle">Population-weighted distribution per census age group</div>
-            </div>
-          </div>
-          <div class="panel__body">
-            <chart-age-box src="chart-age-box.json" style="display:block;min-height:300px;"></chart-age-box>
-          </div>
-          <div class="legend">
-            <div class="legend__item"><div class="legend__swatch" style="background:#2563a8"></div>0–17</div>
-            <div class="legend__item"><div class="legend__swatch" style="background:#1a7a6e"></div>18–29</div>
-            <div class="legend__item"><div class="legend__swatch" style="background:#d97706"></div>30–49</div>
-            <div class="legend__item"><div class="legend__swatch" style="background:#7c3aed"></div>50–64</div>
-            <div class="legend__item"><div class="legend__swatch" style="background:#c0392b"></div>65+</div>
-          </div>
-          <div class="footnote">
-            Age groups derived from census microdata linked to grid cells. Travel time is to the nearest
-            hospital of any level. Each age group's distribution is weighted by that group's population.
-          </div>
-        </div>
-
-        <!-- CDF -->
-        <div class="panel">
-          <div class="panel__header">
-            <div>
-              <div class="panel__title">Cumulative Distribution Function</div>
-              <div class="panel__subtitle">Share of age-group population within X minutes</div>
-            </div>
-          </div>
-          <div class="panel__body">
-            <chart-age-cdf src="chart-age-cdf.json" style="display:block;min-height:300px;"></chart-age-cdf>
-          </div>
-        </div>
-
-        <!-- Bar: mean by age -->
-        <div class="panel">
-          <div class="panel__header">
-            <div>
-              <div class="panel__title">Mean Travel Time by Age Group</div>
-              <div class="panel__subtitle">Population-weighted mean ± 1 std dev</div>
-            </div>
-          </div>
-          <div class="panel__body">
-            <chart-age-bar src="chart-age-bar.json" style="display:block;min-height:300px;"></chart-age-bar>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  </div><!-- /tab-age -->
-
-  <!-- ── Tab 2: Bundesland ── -->
-  <div class="tab-pane" id="tab-bundesland">
-    <div class="content-area">
-      <div class="grid-2">
-
-        <!-- Ranked bar chart -->
-        <div class="panel col-span-2">
-          <div class="panel__header">
-            <div>
-              <div class="panel__title">Median Travel Time by Bundesland</div>
-              <div class="panel__subtitle">Ranked — population-weighted median · Level 3 hospitals</div>
-            </div>
-          </div>
-          <div class="panel__body">
-            <chart-bl-bar src="chart-bl-bar.json" style="display:block;min-height:340px;"></chart-bl-bar>
-          </div>
-          <div class="footnote">
-            Bundesland boundaries per OSM. Population weights from Zensus 2022.
-          </div>
-        </div>
-
-        <!-- Scatter: population density vs median time -->
-        <div class="panel">
-          <div class="panel__header">
-            <div>
-              <div class="panel__title">Population Density vs. Median Travel Time</div>
-              <div class="panel__subtitle">Each point = one Bundesland · density = population / census cells</div>
-            </div>
-          </div>
-          <div class="panel__body">
-            <chart-bl-scatter src="chart-bl-scatter.json" style="display:block;min-height:300px;"></chart-bl-scatter>
-          </div>
-        </div>
-
-        <!-- % pop > 30 min -->
-        <div class="panel">
-          <div class="panel__header">
-            <div>
-              <div class="panel__title">Population &gt; 30 min from Emergency Care</div>
-              <div class="panel__subtitle">Share (%) by Bundesland · Level 3 hospitals</div>
-            </div>
-          </div>
-          <div class="panel__body">
-            <chart-bl-pct src="chart-bl-pct.json" style="display:block;min-height:300px;"></chart-bl-pct>
-          </div>
-        </div>
-
-      </div>
-    </div>
-  </div><!-- /tab-bundesland -->
-
-  <!-- ── Tab 3: Combined ── -->
-  <div class="tab-pane" id="tab-combined">
-    <div class="content-area">
-
-      <!-- Heatmap — age-overlay toggle rendered inside component -->
-      <div class="panel">
-        <div class="panel__header">
-          <div>
-            <div class="panel__title">Bundesland × Age Group — Heat Matrix</div>
-            <div class="panel__subtitle">
-              Mean travel time (min) — rows = Bundesland, columns = age group
-            </div>
-          </div>
-        </div>
-        <div class="panel__body">
-          <chart-combined-heat src="chart-combined-heat.json" style="display:block;min-height:480px;"></chart-combined-heat>
-        </div>
-        <div class="legend">
-          <div class="legend__item"><div class="legend__swatch" style="background:#dce8f5"></div>Short (&lt;10 min)</div>
-          <div class="legend__item"><div class="legend__swatch" style="background:#2563a8"></div>Moderate (10–30 min)</div>
-          <div class="legend__item"><div class="legend__swatch" style="background:#1a1945"></div>Long (&gt;30 min)</div>
-        </div>
-        <div class="footnote">
-          Values are population-weighted mean travel time per state × age group to the nearest hospital of any level.
-        </div>
-      </div>
-
-      <!-- Small multiples row — one per census age group -->
-      <div class="grid-3">
-        <div class="panel">
-          <div class="panel__header">
-            <div><div class="panel__title">0–17 · by Bundesland</div></div>
-          </div>
-          <div class="panel__body">
-            <chart-sm-age src="chart-sm-0-17.json" style="display:block;min-height:240px;"></chart-sm-age>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel__header">
-            <div><div class="panel__title">18–29 · by Bundesland</div></div>
-          </div>
-          <div class="panel__body">
-            <chart-sm-age src="chart-sm-18-29.json" style="display:block;min-height:240px;"></chart-sm-age>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel__header">
-            <div><div class="panel__title">30–49 · by Bundesland</div></div>
-          </div>
-          <div class="panel__body">
-            <chart-sm-age src="chart-sm-30-49.json" style="display:block;min-height:240px;"></chart-sm-age>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel__header">
-            <div><div class="panel__title">50–64 · by Bundesland</div></div>
-          </div>
-          <div class="panel__body">
-            <chart-sm-age src="chart-sm-50-64.json" style="display:block;min-height:240px;"></chart-sm-age>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel__header">
-            <div><div class="panel__title">65+ · by Bundesland</div></div>
-          </div>
-          <div class="panel__body">
-            <chart-sm-age src="chart-sm-65plus.json" style="display:block;min-height:240px;"></chart-sm-age>
-          </div>
-        </div>
-      </div>
-
-    </div>
-  </div><!-- /tab-combined -->
-
-</div><!-- /page-charts -->
+</div><!-- /page-report -->
 
 
 <!-- ═══════════════════════════ SCRIPTS ═══════════════════════════ -->
@@ -911,10 +726,18 @@
   /* ── Page switching ── */
   function showPage(id, el) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.topnav__pages a').forEach(a => a.classList.remove('active'));
+    document.querySelectorAll('#topnav .nav-link').forEach(a => a.classList.remove('active'));
     document.getElementById('page-' + id).classList.add('active');
     el.classList.add('active');
+    history.replaceState(null, '', '#' + id);
   }
+
+  /* ── Deep-link on load ── */
+  document.addEventListener('DOMContentLoaded', () => {
+    const hash = window.location.hash.replace('#', '');
+    const link = document.querySelector('#topnav .nav-link[href="#' + hash + '"]');
+    if (hash && link) showPage(hash, link);
+  });
 
   /* ── Tab switching ── */
   function showTab(id, el) {
@@ -927,6 +750,7 @@
 
 <script id="hospital-stats-data" type="application/json"><!-- INSERT_STATS_JSON --></script>
 <script src="accessibility-map.js"></script>
+<script src="chart-cdf.js"></script>
 <script src="chart-age-box.js"></script>
 <script src="chart-age-cdf.js"></script>
 <script src="chart-age-bar.js"></script>
