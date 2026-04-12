@@ -639,15 +639,15 @@
         <div class="panel__body">
           <div class="stat-item">
             <span class="stat-item__label">Median travel time</span>
-            <span class="stat-item__value"><!-- INSERT_STAT_MEDIAN --> <em>min</em></span>
+            <span id="stat-median" class="stat-item__value"><!-- INSERT_STAT_MEDIAN --> <em>min</em></span>
           </div>
           <div class="stat-item">
             <span class="stat-item__label">≤ 30 min coverage</span>
-            <span class="stat-item__value"><!-- INSERT_STAT_COV30 --> <em>%</em></span>
+            <span id="stat-cov30" class="stat-item__value"><!-- INSERT_STAT_COV30 --> <em>%</em></span>
           </div>
           <div class="stat-item">
             <span class="stat-item__label">Population underserved (&gt;30 min)</span>
-            <span class="stat-item__value"><!-- INSERT_STAT_UNDERSERVED --> <em>M</em></span>
+            <span id="stat-underserved" class="stat-item__value"><!-- INSERT_STAT_UNDERSERVED --> <em>M</em></span>
           </div>
         </div>
       </div>
@@ -925,6 +925,7 @@
   }
 </script>
 
+<script id="hospital-stats-data" type="application/json"><!-- INSERT_STATS_JSON --></script>
 <script src="accessibility-map.js"></script>
 <script src="chart-age-box.js"></script>
 <script src="chart-age-cdf.js"></script>

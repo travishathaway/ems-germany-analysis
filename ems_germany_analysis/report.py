@@ -745,6 +745,38 @@ def build_hospitals_geojson(df_hospitals: pd.DataFrame) -> dict:
 # HTML assembly
 # ---------------------------------------------------------------------------
 
+def _compute_kpis(df_cell: pd.DataFrame, cols: list[str]) -> dict:
+    """Compute summary KPIs for the effective travel time = min across cols."""
+    sub = df_cell.copy()
+    sub["_eff_secs"] = sub[cols].min(axis=1)
+    sub = sub.dropna(subset=["_eff_secs"])
+    total_pop = sub["population"].sum()
+    if total_pop == 0:
+        return {"median": 0.0, "cov30": 0.0, "underserved_m": 0.0}
+    median = float(np.average(sub["_eff_secs"] / 60, weights=sub["population"].clip(lower=0)))
+    cov30 = float(100 * sub.loc[sub["_eff_secs"] <= 1800, "population"].sum() / total_pop)
+    underserved_m = float(sub.loc[sub["_eff_secs"] > 1800, "population"].sum() / 1e6)
+    return {
+        "median": round(median, 1),
+        "cov30": round(cov30, 1),
+        "underserved_m": round(underserved_m, 2),
+    }
+
+
+def compute_stats_by_selection(df_cell: pd.DataFrame) -> dict:
+    """Compute summary KPIs for each hospital level selection (single and pairs)."""
+    col = {
+        "any": ["min_secs_any"],
+        "l1":  ["min_secs_l1"],
+        "l2":  ["min_secs_l2"],
+        "l3":  ["min_secs_l3"],
+        "l1,l2": ["min_secs_l1", "min_secs_l2"],
+        "l1,l3": ["min_secs_l1", "min_secs_l3"],
+        "l2,l3": ["min_secs_l2", "min_secs_l3"],
+    }
+    return {key: _compute_kpis(df_cell, cols) for key, cols in col.items()}
+
+
 def render_report(
     kpi_median: float,
     kpi_cov30: float,
@@ -754,6 +786,7 @@ def render_report(
     census_count: int,
     hospital_count: int,
     data_badge: str,
+    stats_json: str = "{}",
 ) -> str:
     """Render the report HTML by loading the template and substituting KPI placeholders."""
     pkg = importlib.resources.files("ems_germany_analysis")
@@ -768,6 +801,7 @@ def render_report(
         .replace("<!-- INSERT_CENSUS_COUNT -->",     f"{census_count:,}")
         .replace("<!-- INSERT_HOSPITAL_COUNT -->",   f"{hospital_count:,}")
         .replace("<!-- INSERT_DATA_BADGE -->",       data_badge)
+        .replace("<!-- INSERT_STATS_JSON -->",       stats_json)
     )
 
 
@@ -912,6 +946,7 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
             (out_dir / filename).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
     click.echo("Assembling HTML report…")
+    stats_by_selection = compute_stats_by_selection(df_cell)
     html = render_report(
         kpi_median=kpi_median,
         kpi_cov30=kpi_cov30,
@@ -921,6 +956,7 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
         census_count=len(df_cell),
         hospital_count=len(df_hospitals),
         data_badge=f"{resolution} resolution",
+        stats_json=json.dumps(stats_by_selection),
     )
     index_path = out_dir / "index.html"
     index_path.write_text(html, encoding="utf-8")

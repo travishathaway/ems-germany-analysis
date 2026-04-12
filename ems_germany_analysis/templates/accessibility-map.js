@@ -149,10 +149,19 @@
     });
   }
 
-  function makeTravelColor(prop) {
+  const PROP_MAP  = { any: 'avg_travel_any', l1: 'avg_travel_l1', l2: 'avg_travel_l2', l3: 'avg_travel_l3' };
+  const LEVEL_MAP = { l1: 1, l2: 2, l3: 3 };
+
+  // Build a MapLibre expression for the effective (minimum) travel time across selected layers.
+  function makeEffectiveExpr(layers) {
+    const props = [...layers].map(l => ['coalesce', ['get', PROP_MAP[l]], 999]);
+    return props.length === 1 ? props[0] : ['min', ...props];
+  }
+
+  function makeTravelColor(layers) {
     return [
       'interpolate', ['linear'],
-      ['coalesce', ['get', prop], 999],
+      makeEffectiveExpr(layers),
       0,   '#1a9641',
       15,  '#a6d96a',
       30,  '#ffffbf',
@@ -160,6 +169,30 @@
       60,  '#d7191c',
       999, '#aaaaaa',
     ];
+  }
+
+  // Return the stats lookup key for the current selection.
+  function getStatsKey(layers) {
+    if (layers.has('any')) return 'any';
+    const sorted = [...layers].sort();
+    if (sorted.length === 3) return 'any'; // l1+l2+l3 ≡ any
+    return sorted.join(',');
+  }
+
+  // Update the summary stats panel from embedded JSON data.
+  function updateSummaryStats(layers) {
+    const statsEl = document.getElementById('hospital-stats-data');
+    if (!statsEl) return;
+    let stats;
+    try { stats = JSON.parse(statsEl.textContent); } catch { return; }
+    const kpi = stats[getStatsKey(layers)];
+    if (!kpi) return;
+    const medianEl      = document.getElementById('stat-median');
+    const cov30El       = document.getElementById('stat-cov30');
+    const underservedEl = document.getElementById('stat-underserved');
+    if (medianEl)      medianEl.innerHTML      = `${kpi.median} <em>min</em>`;
+    if (cov30El)       cov30El.innerHTML       = `${kpi.cov30} <em>%</em>`;
+    if (underservedEl) underservedEl.innerHTML = `${kpi.underserved_m} <em>M</em>`;
   }
 
   function makeHospitalIcon(label, color) {
@@ -239,9 +272,9 @@
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
-    let currentProp  = 'avg_travel_any';
-    let currentLevel = null;   // null = all levels; 1/2/3 = filter to that level
-    let minTravelMin = 0;      // slider threshold in minutes (0 = no filter)
+    let selectedLayers = new Set(['any']); // set of active layer keys: 'any'|'l1'|'l2'|'l3'
+    let filterLevels   = null;             // null = all levels; [1,2,3] = specific levels
+    let minTravelMin   = 0;               // slider threshold in minutes (0 = no filter)
 
     // Cluster state — declared here so the hospital toggle can access them
     const HOSP_COLORS = ['#6b9ec7', '#9b7dbf', '#c4744d'];
@@ -276,7 +309,7 @@
         map.addLayer({
           id: `${id}-fill`, type: 'fill', source, 'source-layer': sourceLayer,
           minzoom: minZoom, maxzoom: maxZoom,
-          paint: { 'fill-color': makeTravelColor(currentProp), 'fill-opacity': 0.75 },
+          paint: { 'fill-color': makeTravelColor(selectedLayers), 'fill-opacity': 0.75 },
         });
         map.addLayer({
           id: `${id}-outline`, type: 'line', source, 'source-layer': sourceLayer,
@@ -313,13 +346,13 @@
         return `<path d="M ${r + r0 * x0} ${r + r0 * y0} L ${r + r * x0} ${r + r * y0} A ${r} ${r} 0 ${largeArc} 1 ${r + r * x1} ${r + r * y1} L ${r + r0 * x1} ${r + r0 * y1} A ${r0} ${r0} 0 ${largeArc} 0 ${r + r0 * x0} ${r + r0 * y0}" fill="${color}" />`;
       }
 
-      // filterLevel: null = all levels, 1/2/3 = show only that level's segment.
-      // Returns null if no hospitals of the requested level exist in this cluster.
-      function createClusterDonut(props, filterLevel) {
+      // filterLevels: null = all levels, [1,2,3] = show only those levels' segments.
+      // Returns null if no hospitals of the requested levels exist in this cluster.
+      function createClusterDonut(props, filterLevels) {
         const rawCounts = [props.lvl1 || 0, props.lvl2 || 0, props.lvl3 || 0];
-        const counts = filterLevel === null
+        const counts = filterLevels === null
           ? rawCounts
-          : rawCounts.map((c, i) => (i + 1 === filterLevel ? c : 0));
+          : rawCounts.map((c, i) => (filterLevels.includes(i + 1) ? c : 0));
         const total  = counts.reduce((a, b) => a + b, 0);
         if (total === 0) return null;
         const offsets = counts.reduce((acc, c) => { acc.push(acc[acc.length - 1] + c); return acc; }, [0]);
@@ -339,9 +372,9 @@
         const el = document.createElement('div');
         el.style.cursor = 'pointer';
         el.innerHTML = svg;
-        el.title = filterLevel === null
+        el.title = filterLevels === null
           ? `${total} hospitals (L1: ${rawCounts[0]}, L2: ${rawCounts[1]}, L3: ${rawCounts[2]})`
-          : `${total} Level ${filterLevel} hospitals`;
+          : `${total} hospitals (${filterLevels.map(l => `L${l}: ${rawCounts[l - 1]}`).join(', ')})`;
         return el;
       }
 
@@ -354,16 +387,16 @@
           const props = feature.properties;
           if (!props.cluster) continue;
 
-          // Skip clusters with none of the selected level
-          if (currentLevel !== null) {
-            const lvlKey = `lvl${currentLevel}`;
-            if (!props[lvlKey]) continue;
+          // Skip clusters with none of the selected levels
+          if (filterLevels !== null) {
+            const hasAny = filterLevels.some(lvl => (props[`lvl${lvl}`] || 0) > 0);
+            if (!hasAny) continue;
           }
 
           const id = props.cluster_id;
           let marker = clusterMarkers[id];
           if (!marker) {
-            const el = createClusterDonut(props, currentLevel);
+            const el = createClusterDonut(props, filterLevels);
             if (!el) continue;
             marker = clusterMarkers[id] = new maplibregl.Marker({ element: el })
               .setLngLat(feature.geometry.coordinates);
@@ -379,15 +412,24 @@
       }
 
       updateHospitalFilter = function () {
-        // Update individual hospital icon filter.
-        // Use consistent legacy filter syntax throughout — mixing legacy and
-        // expression syntax inside ['all', ...] is unreliable in MapLibre.
-        if (currentLevel === null) {
+        // Derive the numeric levels to filter to (null = all levels).
+        const specificLevels = [...selectedLayers]
+          .filter(l => l !== 'any')
+          .map(l => LEVEL_MAP[l]);
+        if (selectedLayers.has('any') || specificLevels.length === 0 || specificLevels.length === 3) {
+          filterLevels = null;
           map.setFilter('hospitals-layer', ['!=', 'cluster', true]);
-        } else {
+        } else if (specificLevels.length === 1) {
+          filterLevels = specificLevels;
           map.setFilter('hospitals-layer', ['all',
             ['!=', 'cluster', true],
-            ['==', 'level', currentLevel],
+            ['==', 'level', specificLevels[0]],
+          ]);
+        } else {
+          filterLevels = specificLevels;
+          map.setFilter('hospitals-layer', ['all',
+            ['!=', 'cluster', true],
+            ['match', ['get', 'level'], specificLevels, true, false],
           ]);
         }
         // Rebuild cluster donuts with new filter (clear cache first)
@@ -406,9 +448,10 @@
         'hexagon-100m-fill', 'hexagon-100m-outline',
       ];
       updateHexFilter = function () {
+        const eff = makeEffectiveExpr(selectedLayers);
         const filter = minTravelMin === 0 ? null : ['all',
-          ['>=', ['coalesce', ['get', currentProp], 999], minTravelMin],
-          ['<',  ['coalesce', ['get', currentProp], 999], 900],
+          ['>=', eff, minTravelMin],
+          ['<',  eff, 900],
         ];
         hexAllLayers.forEach(id => map.setFilter(id, filter));
       };
@@ -482,21 +525,39 @@
       map.on('mouseleave', 'hospitals-layer', () => { map.getCanvas().style.cursor = ''; });
     });
 
-    // Layer control buttons
-    const propMap  = { any: 'avg_travel_any', l1: 'avg_travel_l1', l2: 'avg_travel_l2', l3: 'avg_travel_l3' };
-    const levelMap = { any: null, l1: 1, l2: 2, l3: 3 };
+    // Layer control buttons — multi-select toggle.
+    // "Any hospital" is mutually exclusive with specific levels; levels can be combined.
     const fillLayers = ['hexagon-5km-fill', 'hexagon-1km-fill', 'hexagon-100m-fill'];
 
     document.querySelectorAll('.map-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const layer = btn.dataset.layer;
-        currentProp  = propMap[layer];
-        currentLevel = levelMap[layer];
-        const color = makeTravelColor(currentProp);
+
+        if (layer === 'any') {
+          // "Any hospital" clears specific level selections
+          selectedLayers = new Set(['any']);
+        } else {
+          // Specific level: deselect "any" and toggle this level
+          selectedLayers.delete('any');
+          if (selectedLayers.has(layer)) {
+            selectedLayers.delete(layer);
+            // Never leave empty — revert to "any" if all deselected
+            if (selectedLayers.size === 0) selectedLayers.add('any');
+          } else {
+            selectedLayers.add(layer);
+          }
+        }
+
+        // Sync button active states
+        document.querySelectorAll('.map-btn').forEach(b => {
+          b.classList.toggle('active', selectedLayers.has(b.dataset.layer));
+        });
+
+        const color = makeTravelColor(selectedLayers);
         fillLayers.forEach(id => map.setPaintProperty(id, 'fill-color', color));
-        document.querySelectorAll('.map-btn').forEach(b => b.classList.toggle('active', b === btn));
         updateHospitalFilter();
-        updateHexFilter();   // reapply threshold with updated currentProp
+        updateHexFilter();
+        updateSummaryStats(selectedLayers);
       });
     });
 
