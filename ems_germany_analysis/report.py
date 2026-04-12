@@ -1295,6 +1295,7 @@ def generate(dsn: str, output: str, skip_states: bool, skip_tiles: bool, use_cac
         "chart-sm-age.js",
         "chart-age-level-bl.js",
         "chart-bl-coverage.js",
+        "chart-cdf.js",
     ]
     for js_file in component_files:
         text = pkg.joinpath(f"templates/{js_file}").read_text(encoding="utf-8")
