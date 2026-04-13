@@ -80,55 +80,6 @@ The following chart shows the cumulative share of the German population within a
 </div>
 ```
 
-### Bundesland Analysis
-
-Germany's 16 federal states (*Bundesländer*) reveal substantial disparities in emergency care
-accessibility — driven by a mix of population density, road infrastructure quality, and the
-geographic clustering of comprehensive hospitals.
-
-```{=html}
-<div class="panel col-span-2">
-  <div class="panel__header">
-    <div>
-      <div class="panel__title">Median Travel Time by Bundesland</div>
-      <div class="panel__subtitle">Ranked — population-weighted median · Level 3 hospitals</div>
-    </div>
-  </div>
-  <div class="panel__body">
-    <chart-bl-bar src="chart-bl-bar.json" style="display:block;min-height:340px;"></chart-bl-bar>
-  </div>
-  <div class="footnote">
-    Bundesland boundaries per OSM. Population weights from Zensus 2022.
-  </div>
-</div>
-```
-
-```{=html}
-<div class="panel">
-  <div class="panel__header">
-    <div>
-      <div class="panel__title">Population Density vs. Median Travel Time</div>
-      <div class="panel__subtitle">Each point = one Bundesland · density = population / census cells</div>
-    </div>
-  </div>
-  <div class="panel__body">
-    <chart-bl-scatter src="chart-bl-scatter.json" style="display:block;min-height:300px;"></chart-bl-scatter>
-  </div>
-</div>
-
-<div class="panel">
-  <div class="panel__header">
-    <div>
-      <div class="panel__title">Population Coverage by Bundesland</div>
-      <div class="panel__subtitle">Share (%) within threshold · Any Hospital or Level 2 or 3</div>
-    </div>
-  </div>
-  <div class="panel__body">
-    <chart-bl-coverage src="chart-bl-coverage.json" style="display:block;min-height:420px;"></chart-bl-coverage>
-  </div>
-</div>
-```
-
 ### Age-Group Access by Hospital Level and Bundesland
 
 The chart below compares the share of each age group's population that can reach
@@ -150,6 +101,28 @@ hospital categories.
     <chart-age-level-bl src="chart-age-level-bl.json" style="display:block;min-height:360px;"></chart-age-level-bl>
   </div>
   <div class="footnote">
+    Population weights from Zensus 2022. Travel times via OpenRouteService.
+    Level 2 or 3 = nearest hospital that is Advanced or Comprehensive care.
+  </div>
+</div>
+```
+
+### Bundesland Analysis
+
+Germany's 16 federal states (*Bundesländer*) reveal substantial disparities in emergency care
+accessibility — driven by a mix of population density, road infrastructure quality, and the
+geographic clustering of comprehensive hospitals.
+
+```{=html}
+<div class="panel">
+  <div class="panel__header">
+    <div>
+      <div class="panel__title">Population Coverage by Bundesland</div>
+      <div class="panel__subtitle">Share (%) within threshold · Any Hospital or Level 2 or 3</div>
+    </div>
+  </div>
+  <div class="panel__body">
+    <chart-bl-coverage src="chart-bl-coverage.json" style="display:block;min-height:420px;"></chart-bl-coverage>
     Population weights from Zensus 2022. Travel times via OpenRouteService.
     Level 2 or 3 = nearest hospital that is Advanced or Comprehensive care.
   </div>
