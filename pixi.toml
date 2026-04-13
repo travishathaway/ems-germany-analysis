@@ -21,6 +21,7 @@ postgresql = ">=18.3,<19"
 postgis = ">=3.6.2,<4"
 quarto = ">=1.8.27,<2"
 jupyter = ">=1.1.1,<2"
+nodejs = ">=22"
 
 [pypi-dependencies]
 ems-germany-analysis = { path = ".", editable = true }
@@ -47,3 +48,12 @@ dev = ["dev"]
 
 [tasks]
 emsde = "emsde"
+web-install = {
+    cmd = "npm install",
+    cwd = "web" 
+}
+web-build = { 
+    cmd = "npm run build",
+    cwd = "web",
+    depends-on = ["web-install"]
+}
