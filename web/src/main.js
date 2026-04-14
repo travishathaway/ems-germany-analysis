@@ -1,0 +1,12 @@
+import './accessibility-map.js';
+import './chart-cdf.js';
+import './chart-age-bar.js';
+import './chart-age-box.js';
+import './chart-age-cdf.js';
+import './chart-bl-bar.js';
+import './chart-bl-scatter.js';
+import './chart-bl-pct.js';
+import './chart-combined-heat.js';
+import './chart-sm-age.js';
+import './chart-age-level-bl.js';
+import './chart-bl-coverage.js';

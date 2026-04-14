@@ -1,0 +1,19 @@
+{
+  "name": "ems-germany-analysis-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-quarto.js && vite build",
+    "build:app": "vite build",
+    "dev": "vite"
+  },
+  "devDependencies": {
+    "vite": "^6.3.2"
+  },
+  "dependencies": {
+    "maplibre-gl": "^4.7.1",
+    "plotly.js-cartesian-dist": "^3.5.0",
+    "pmtiles": "^3.2.0"
+  }
+}
