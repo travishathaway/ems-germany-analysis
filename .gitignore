@@ -76,3 +76,9 @@ dist/
 .pixi/
 
 .mcp.json
+
+# website
+web/data/
+web/.vite/
+
+data/
